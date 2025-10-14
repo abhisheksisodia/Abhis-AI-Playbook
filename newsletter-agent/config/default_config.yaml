@@ -1,0 +1,59 @@
+schedule:
+  cron: "0 6 * * 0"  # Sunday 06:00 UTC
+  lookback_days: 7
+
+sources:
+  youtube_channels:
+    practical_ai:
+      channel_id: "UC7kDSkjwJPrxY9YdS-Wb5jg"
+      tags: ["frameworks", "operators"]
+    openai:
+      channel_id: "UCXZCJLdBC09xxGZ6gcdrc6A"
+      tags: ["research", "launch"]
+  blog_feeds:
+    openai_blog:
+      url: "https://openai.com/blog/rss"
+      tags: ["official"]
+    hugging_face:
+      url: "https://huggingface.co/blog/feed.xml"
+      tags: ["engineering"]
+  manual_sources_sheet: null
+
+scoring:
+  min_auto_publish_score: 65
+  manual_review_floor: 50
+  weights:
+    audience_fit: 0.3
+    practicality: 0.25
+    originality: 0.2
+    freshness: 0.15
+    brand_safety: 0.1
+
+llm:
+  provider: "anthropic"
+  model: "claude-3-5-sonnet-20240620"
+  max_retries: 3
+  temperature: 0.2
+  api_key_env: "ANTHROPIC_API_KEY"
+
+storage:
+  backend: "local"
+  path: "data"
+  airtable_base_id: null
+  airtable_api_key_env: "AIRTABLE_API_KEY"
+
+notifications:
+  slack_webhook_env: "NEWSLETTER_SLACK_WEBHOOK"
+  email_service: null
+  recipients: []
+
+summarizer:
+  top_k: 10
+  enrich_social_copy: true
+  include_seo: true
+
+assembly:
+  reference_style_path: "reference_newsletters/"
+  beehiiv:
+    api_key_env: "BEEHIIV_API_KEY"
+    publication_id: "your-publication-id"

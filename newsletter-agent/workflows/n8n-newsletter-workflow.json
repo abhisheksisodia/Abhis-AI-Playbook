@@ -1,0 +1,337 @@
+{
+  "name": "Abhi's AI Playbook Newsletter Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": [
+          {
+            "mode": "everyWeek",
+            "hour": 6,
+            "weekday": 7,
+            "minute": 0
+          }
+        ]
+      },
+      "id": "1",
+      "name": "Cron Trigger",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "path": "newsletter-agent/manual-trigger",
+        "responseMode": "lastNode"
+      },
+      "id": "2",
+      "name": "Manual Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "command": "python -m newsletter_agent.cli run --issue-number {{$json[\"issue_number\"] || 0}} --issue-date {{$json[\"issue_date\"] || $now}} --strategy {{$json[\"strategy_path\"]}} --tone {{$json[\"tone_path\"]}} --personality {{$json[\"personality_path\"]}}"
+      },
+      "id": "3",
+      "name": "Run Pipeline CLI",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -450,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "#newsletter-alerts",
+        "text": "⚠️ Strategy assets missing, workflow paused."
+      },
+      "id": "4",
+      "name": "Slack Missing Context Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        -1060,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const strategy = $json[\"strategy_report\"];\nconst tone = $json[\"tone_report\"];\nconst persona = $json[\"personality_notes\"];\nif (!strategy || !tone) {\n  return [{ contextReady: false }];\n}\nreturn [{ contextReady: true }];"
+      },
+      "id": "5",
+      "name": "Validate Context",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -1250,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json[\"contextReady\"]}}"
+            }
+          ]
+        }
+      },
+      "id": "6",
+      "name": "Context Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -1060,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "application": "={{$json[\"beehiiv_draft\"]}}",
+        "text": "New Abhi's AI Playbook draft ready."
+      },
+      "id": "7",
+      "name": "Slack Draft Digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        -180,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "return [{\n  draftUrl: items[0].json[\"draft_url\"],\n  qualityUrl: items[0].json[\"quality_report\"],\n  topPickTitles: items[0].json[\"top_picks\"].map(p => p.title)\n}];"
+      },
+      "id": "8",
+      "name": "Format Notification",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "command": "python -m newsletter_agent.cli run --issue-number {{$json[\"issue_number\"]}} --issue-date {{$json[\"issue_date\"]}}",
+        "options": {
+          "workingDirectory": "/workspace/newsletter-agent"
+        }
+      },
+      "id": "9",
+      "name": "Retry Pipeline",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "value1": "={{$json[\"quality_report\"]}}"
+      },
+      "id": "10",
+      "name": "Quality Report Branch",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "url": "https://api.beehiiv.com/v2/publications/{{ $env.BEEHIIV_PUBLICATION_ID }}/drafts",
+        "method": "POST",
+        "sendBody": true,
+        "jsonBody": "={{$json[\"beehiiv_payload\"]}}",
+        "options": {
+          "response": {
+            "response": "json"
+          }
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$credentials.beehiivApi.apiKey}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "11",
+      "name": "Create Beehiiv Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "return items;"
+      },
+      "id": "12",
+      "name": "Archive Outputs",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        20,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Cron Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Context": {
+      "main": [
+        [
+          {
+            "node": "Context Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Context Ready?": {
+      "main": [
+        [
+          {
+            "node": "Run Pipeline CLI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Missing Context Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Pipeline CLI": {
+      "main": [
+        [
+          {
+            "node": "Format Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Beehiiv Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Quality Report Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Report Branch": {
+      "main": [
+        [
+          {
+            "node": "Format Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Notification": {
+      "main": [
+        [
+          {
+            "node": "Slack Draft Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Missing Context Alert": {
+      "main": [
+        [
+          {
+            "node": "Retry Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Beehiiv Draft": {
+      "main": [
+        [
+          {
+            "node": "Archive Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": "DEFAULT"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "newsletter"
+    },
+    {
+      "name": "automation"
+    }
+  ]
+}
