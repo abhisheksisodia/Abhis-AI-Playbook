@@ -1,6 +1,6 @@
 # System Architecture Overview
 
-This document outlines the architecture for the automated newsletter curation system that powers “Abhi's AI Playbook.” The design mirrors Ben’s AI newsletter agency workflow while adding implementation guidance for a production deployment.
+This document outlines the architecture for the automated newsletter curation system that powers “Abhi's AI Playbook.” The design now ships as a **pure n8n workflow** (no external runtime required) that mirrors Ben’s agency process end-to-end, with an optional Python toolkit retained for teams that prefer code-driven orchestration.
 
 ## High-Level Workflow
 
@@ -27,52 +27,53 @@ This document outlines the architecture for the automated newsletter curation sy
    - Manual review queue for borderline scored items (50–59).
    - Final editorial review before distribution.
 
-## Component Breakdown
+## Primary Implementation: `workflows/n8n-newsletter-workflow.json`
 
-- **`src/newsletter_agent/config.py`** — Loads YAML/ENV configuration for sources, scoring thresholds, scheduling, LLM providers, and storage credentials. Supports non-technical overrides via config files or Google Sheets sync.
-- **`src/newsletter_agent/schemas.py`** — Dataclasses that implement the Item, Summary, and Newsletter Draft contracts to guarantee type-safe payloads.
-- **Discovery (`src/newsletter_agent/discovery/`)**
-  - `youtube.py` — YouTube Data API client for channel polling + transcript retrieval (YouTube Transcript API fallback).
-  - `blogs.py` — RSS ingestion and boilerplate stripping (readability).
-  - `manual.py` — Hooks for manual idea ingestion (CLI/web form).
-- **Pipeline (`src/newsletter_agent/pipeline/`)**
-  - `normalize.py` — Cleaning, deduplication, and text extraction.
-  - `scoring.py` — LLM scoring orchestrator with prompt templates and adjustable weightings.
-  - `summaries.py` — Deep summary generation with structured outputs.
-  - `assembly.py` — Newsletter composer (Markdown + Beehiiv JSON) applying strategy and tone assets.
-  - `quality.py` — Quality gate orchestrator generating detailed reports.
-- **Storage (`src/newsletter_agent/storage/`)**
-  - `datastore.py` — Abstract persistence layer (Airtable/Notion/Postgres/SQLite).
-  - `filesystem.py` — Local JSON persistence for development/testing.
-- **Notifiers (`src/newsletter_agent/notifiers/`)**
-  - `slack.py`, `email.py`, `webhooks.py` — Notification senders with templates.
-- **Utilities (`src/newsletter_agent/utils/`)**
-  - Prompt rendering, similarity scoring, timestamp helpers, logging.
+The workflow is organised into modular n8n nodes that map directly to the seven stages:
 
-## Orchestration
+| Stage | n8n Nodes | Notes |
+| --- | --- | --- |
+| Trigger & Context | `Weekly Schedule`, `Manual Trigger`, `Run Metadata` | Weekly cron + webhook input. `Run Metadata` normalises payloads and injects defaults (sources, scoring, LLM config, Beehiiv settings). |
+| Discover | `Discover Content` | Fetches YouTube content (Data API + transcript endpoint) and blog posts (RSS→HTML). All logic lives in one Function node using `$httpRequest`, so no external runtime is required. |
+| Normalize & Deduplicate | `Normalize & Deduplicate` | Cleans text, removes boilerplate, and handles URL/title dedupe with token overlap heuristics. |
+| Score | `Score & Rank` | Calls Anthropic or OpenAI (selected in config) to produce structured scores + rationales. |
+| Aggregate & Review | `Aggregate Results`, `Flagged Items?`, `Slack Flagged Review`, `Any Passed?` | Splits items into passed / flagged / dropped, posts manual-review alerts to Slack, and gates the downstream workflow if nothing passes the threshold. |
+| Summaries | `Generate Summaries` | Generates deep structured summaries (TL;DR, Why It Matters, actionable bullets, social copy, SEO metadata). |
+| Assembly | `Assemble Draft` | Compiles reference-style markdown + Beehiiv HTML using strategy, tone, personality context, and structured summaries. |
+| Quality & Delivery | `Quality & Outputs`, `Beehiiv Draft`, `Slack Digest`, `Archive to DB (configure)` | Runs quality gates (length, link validation, counts), prepares Beehiiv payloads, conditionally pushes a draft via API, sends digest to Slack, and exposes an archive payload for Airtable/Notion/DB adapters. |
+| Fallback Notification | `No Draft Alert` | Notifies editors when no content cleared the scoring threshold. |
 
-- **Primary:** `workflows/n8n-newsletter-workflow.json` (visual N8N design with trigger/schedule, approval nodes, and modular sub-workflows for each stage).
-- **Alternative:** Python-based orchestrator (`src/newsletter_agent/cli.py`) using Prefect-like state machine for local runs and testing.
-- Scheduling defaults to weekly Sundays at 06:00 UTC with support for manual webhook triggers.
+Key design choices:
 
-## Data Persistence
+- **Single execution context** – every API call happens via n8n Function/HTTP nodes; there is no dependency on the Python CLI.
+- **Config-first** – thresholds, sources, LLM provider/model, and notification channels are controlled through the metadata function (and can be overridden via webhook payload or env vars).
+- **Graceful degradation** – the Beehiiv node checks credentials before writing, Slack alerts fire even if Beehiiv is skipped, and manual-review notifications flow regardless of draft success.
+- **Archive hook** – the “Archive to DB (configure)” Set node is disabled by default and exists as a placeholder to connect Airtable, Notion, Postgres, etc., using the structured `archive` payload from `Quality & Outputs`.
 
-- Local development uses `data/` folder with versioned JSON exports of items, summaries, newsletters, and quality reports.
-- Production recommends Airtable or Postgres to provide queryable history, with connectors abstracted behind the storage layer.
+Refer to `docs/orchestration.md` for node-by-node wiring guidance, required credentials, and scaling considerations.
 
-## Security & Configuration Management
+## Optional Python Toolkit
 
-- Secrets (API keys, webhook tokens) pulled from environment variables or `.env` managed by Doppler/1Password.
-- Configurable sources and thresholds live in `config/default_config.yaml` and optional Google Sheet integration (CSV sync task).
+The Python package under `src/newsletter_agent/` mirrors the same data contracts and prompt templates and can be used for:
+
+- local testing or CLI-driven runs (`python -m newsletter_agent.cli run ...`);
+- automated regression tests against fixed fixtures;
+- building alternate orchestrations (e.g., Prefect/Temporal) if you migrate away from n8n in the future.
+
+## Data Persistence & Configuration
+
+- **n8n storage** – the workflow emits archive-ready JSON (`$json.archive`) containing items, summaries, quick hits, flagged content, quality report, markdown, and Beehiiv payloads.
+- **Secrets** – provide API keys (YouTube, Anthropic/OpenAI, Beehiiv, Slack) via n8n credentials or environment variables referenced in the Function nodes.
+- **Source management** – update the default channel/feed lists inside `Run Metadata` or supply overrides via webhook payload/Google Sheet before the run.
 
 ## Observability
 
-- Structured logging with correlation IDs per run.
-- Quality gate reports stored alongside newsletter drafts.
-- Optional Langfuse/PromptMetheus integration hooks for prompt A/B tracking.
+- Quality reports and logs are bundled in the archive payload for downstream analysis.
+- Slack notifications surface both successful drafts and review-required items.
+- Extend with Langfuse/PromptMetheus by adding logging inside the scoring/summarisation Function nodes (placeholders called out in the code).
 
 ## Next Steps
 
-1. Implement the modular pipeline components described above.
-2. Populate N8N workflow JSON using node templates provided in `docs/orchestration.md`.
-3. Connect storage and notifier adapters to the organization’s infrastructure.
+1. Import `workflows/n8n-newsletter-workflow.json` into your n8n instance and configure credentials (YouTube Data API, Anthropic/OpenAI, Slack, Beehiiv).
+2. Connect the optional archive node to Airtable/Notion/Postgres as your source of record.
+3. Plug in your strategy, tone, and personality texts via the webhook payload or upstream nodes (Google Drive/Notion) so the assembly stage mirrors your brand voice.

@@ -1,6 +1,6 @@
 # Operations Playbook
 
-This guide documents setup, day-to-day operations, source management, and troubleshooting for the Abhi's AI Playbook newsletter system.
+This guide covers setup, day-to-day operations, source management, and troubleshooting for the n8n-first Abhi's AI Playbook newsletter system.
 
 ## 1. Initial Setup
 
@@ -8,96 +8,87 @@ This guide documents setup, day-to-day operations, source management, and troubl
    - YouTube Data API key (`YOUTUBE_API_KEY`)
    - LLM provider key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`)
    - Beehiiv API key (`BEEHIIV_API_KEY`) & publication ID
-   - Slack Incoming Webhook (`NEWSLETTER_SLACK_WEBHOOK`)
-   - Optional: Airtable/Notion/Postgres credentials for persistence
+   - Slack OAuth/Webhook credentials for notifications
+   - Optional: Airtable/Notion/Postgres credentials if you plan to archive structured data
 
-2. **Configure sources**
-   - Edit `config/default_config.yaml` (or override at `~/.newsletter-agent-config.yaml`) with YouTube channels and blog feeds.
-   - Each source supports `tags` used for downstream filtering and analytics.
-   - For non-RSS blogs, add custom scrapers (see §4.3).
+2. **Import the workflow**
+   - Upload `workflows/n8n-newsletter-workflow.json` to n8n.
+   - Assign the credentials above to the relevant nodes (`Discover Content`, `Score & Rank`, `Generate Summaries`, `Beehiiv Draft`, Slack nodes).
 
 3. **Prepare reference assets**
-   - Store the following in a shared drive or repo:
-     - Newsletter Strategy Report (Markdown/PDF)
-     - Writing Framework / Tone of Voice report
-     - Personality background notes (stories, anecdotes)
-     - 3–5 reference newsletter examples (Markdown/PDF)
-     - Reference brand imagery (for future design automation)
+   - Store your Strategy report, Tone of voice guide, and Personality notes somewhere accessible (Notion, Google Drive, Git). Either paste them directly into the webhook payload or add upstream nodes to fetch them before `Run Metadata`.
+   - Keep 3–5 reference newsletters handy to iterate on prompts.
 
-4. **Install runtime**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
+4. **Set defaults**
+   - Update the channel/feed defaults inside the `Run Metadata` function if you want different starting sources.
+   - Optionally define env vars on the n8n worker (e.g., `LLM_PROVIDER`, `LLM_MODEL`, `SLACK_NEWSLETTER_CHANNEL`, `DEFAULT_LOOKBACK_DAYS`).
 
 ## 2. Operational Runbook
 
 1. **Trigger**
-   - N8N cron trigger (default Sunday 06:00 UTC) or manual webhook call.
-   - Local testing: `python -m newsletter_agent.cli run --issue-number 42 --issue-date 2024-07-07`.
+   - Scheduled: enable the `Weekly Schedule` node (defaults to Sunday 06:00 UTC).
+   - Manual: POST to the `Manual Trigger` webhook with overrides (`lookback_days`, `strategy_text`, etc.) when you need an ad-hoc run.
 
 2. **Monitor**
-   - CLI logs stream in the terminal or capture via your orchestrator (N8N/Prefect).
-   - Slack digest posts to #newsletter-alerts with draft + quality summary.
-   - Flagged borderline items appear in `data/flagged_items.json` and Slack thread for approval.
+   - n8n execution logs show each stage; inspect Function node output for debug info.
+   - `Slack Flagged Review` posts borderline items (scores 50–59) to the review channel.
+  - `Slack Digest` posts draft status, top picks, and Beehiiv result to the newsletter channel.
 
 3. **Review**
-   - Open `data/issue-xx-YYYY-MM-DD/newsletter.md` for the Markdown draft.
-   - Inspect `data/quality_report.json` for any failed checks.
-   - Apply editorial tweaks and publish from Beehiiv draft.
+   - If Beehiiv credentials are present, open the draft via the link in Slack; otherwise, grab markdown/HTML from the `Quality & Outputs` node (or archive payload).
+   - Check the quality report summary in Slack (length limits, link validation results).
+   - Apply final edits and publish from Beehiiv once approved.
 
 4. **Archive**
-   - JSON outputs stored in `data/` for auditability.
-   - Optional: push to Airtable/Notion using datastore adapters.
+   - Enable the placeholder node `Archive to DB (configure)` and connect Airtable/Notion/Postgres (use `{{$json.archive}}`).
+   - Store the full archive payload per run to keep sources, summaries, drafts, and quality checks queryable.
 
 ## 3. Source Management
 
 1. **Add / remove sources**
-   - Update `config/default_config.yaml` and commit.
-   - For business-facing configuration, sync a Google Sheet and modify `sources.manual_sources_sheet` to automate ingestion.
+   - Edit the arrays in `Run Metadata` (`youtubeChannels`, `blogFeeds`).
+   - Or pass new sources via webhook payload: `{ "youtube_channels": [...], "blog_feeds": [...] }`.
 
 2. **Tagging strategy**
    - Use tags to categorize content by pillar (e.g., `frameworks`, `builder`, `case-study`).
    - Downstream analytics can filter on tags to balance content mix.
 
 3. **Handling paywalled or unstable feeds**
-   - Use the `manual` discovery method to ingest curated links.
-   - Configure an additional N8N branch that watches a “Manual Insights” Google Sheet and appends entries into the pipeline.
+   - Add a separate Function/Webhook branch to append manually curated links before `Normalize & Deduplicate`.
+   - For paywalled sources, capture summaries via manual input (Webhook payload can include pre-written insights).
 
 4. **Scraping non-RSS blogs**
-   - Implement a custom fetcher in `src/newsletter_agent/discovery/` (e.g., `custom_blog.py`).
-   - Register the scraper in the CLI by importing it in `cli.py` and merging results with other sources.
+   - Extend the `Discover Content` node (it already fetches HTML and strips boilerplate). Add extra parsing logic or additional endpoints as needed.
 
 ## 4. Prompt & Model Optimization
 
 1. **Prompt storage**
-   - Scoring, summary, and assembly prompts live in `pipeline/scoring.py`, `pipeline/summaries.py`, and `pipeline/assembly.py`.
-   - Version prompts using Git or a prompt management tool (Langfuse/PromptMetheus).
+   - Scoring, summaries, and assembly prompts live directly inside the respective Function nodes (`Score & Rank`, `Generate Summaries`, `Assemble Draft`).
+   - Copy them into Langfuse/PromptMetheus for A/B testing and keep versions in Git alongside this repo.
 
 2. **Experimentation workflow**
-   - Use Langfuse/PromptMetheus to toggle context variables (strategy, tone, references) and track impact.
-   - Maintain color-coded context variables (green = LLM generated, blue = user provided).
+   - Adjust metadata payloads (e.g., toggle strategy text, tone text) to AB-test context.
+   - Log experiments by extending Function nodes with `$emit` to your telemetry stack.
 
 3. **Model selection**
    - Default: Claude 3.5 Sonnet for writing-heavy tasks.
-   - Alternative: `gpt-4o` for lower latency or `gpt-4.1` for coding-style reasoning.
-   - Adjust via `llm.provider` and `llm.model` in the config.
+   - Alternative: `gpt-4o` / `gpt-4.1` for latency tweaks.
+   - Set `LLM_PROVIDER` / `LLM_MODEL` env vars or pass via webhook payload to switch models at runtime.
 
 ## 5. Troubleshooting
 
 | Symptom | Likely Cause | Resolution |
 | --- | --- | --- |
-| No YouTube results | Expired API key, wrong channel ID | Verify `YOUTUBE_API_KEY`; confirm channel ID via YouTube Studio |
-| LLM JSON parsing errors | Hallucination / truncated response | Reduce temperature, increase `max_output_tokens`, add `json` tool call for OpenAI |
-| Slack digest missing | `NEWSLETTER_SLACK_WEBHOOK` not set | Export webhook env var or disable Slack notifier |
-| Beehiiv draft creation fails | Missing publication ID or API key | Double-check credentials in N8N or `.env`; verify API scope |
-| Link validation false negatives | Sites block HEAD requests | Modify `_validate_links` in `quality.py` to fallback to GET |
+| No YouTube results | Expired API key or wrong channel ID | Verify `YOUTUBE_API_KEY`; confirm channel IDs in `Run Metadata`. |
+| LLM JSON parse errors | Model hallucinated malformed JSON | Lower temperature, increase `max_tokens`, or switch providers; inspect `Score & Rank` / `Generate Summaries` logs. |
+| Slack messages missing | Slack credentials not attached | Open the Slack node, assign credentials, or set channel env vars. |
+| Beehiiv draft skipped | Missing API key/publication ID or HTML empty | Set `BEEHIIV_API_KEY` and publication ID; confirm assembly returned HTML. |
+| Link validation failures | Sites block HEAD requests | Use the GET fallback already in place or adjust timeout. |
 
 ## 6. Enhancements Roadmap
 
 - Add factual verification by sampling quotes and cross-checking via retrieval (SerpAPI/Bing Search).
 - Integrate Whisper Flow for voice-to-text manual insights and append to discovery stage.
-- Implement Airtable datastore adapter for collaborative review workflows.
+- Wire the archive payload into Airtable/Notion for collaborative review.
 - Generate branded hero images via RUNWAY or Midjourney API, guided by reference imagery.
 - Extend Quick Hits section with automated TL;DR generation per item (mini summarization pass).

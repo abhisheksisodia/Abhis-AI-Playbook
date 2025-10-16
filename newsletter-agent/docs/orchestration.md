@@ -1,80 +1,62 @@
-# Orchestration Guide (N8N)
+# Orchestration Guide (Pure n8n)
 
-The `workflows/n8n-newsletter-workflow.json` file provides a ready-to-import blueprint for building the production automation in N8N. This document explains the stages, required environment variables, and human-in-the-loop checkpoints.
+Import `workflows/n8n-newsletter-workflow.json` into your n8n instance to run the entire “Abhi’s AI Playbook” curation pipeline without leaving n8n. This guide explains each node, required credentials, and common customisations.
 
-## Workflow Overview
+## Node-by-Node Walkthrough
 
-1. **Trigger Layer**
-   - `Cron` node (default: Sunday 06:00 UTC) for scheduled runs.
-   - `Webhook` node for manual triggers (e.g., triggered from Slack slash command).
+| Order | Node | Purpose | Key Inputs/Outputs |
+| --- | --- | --- | --- |
+| 1 | **Weekly Schedule** | Cron trigger (default Sunday 06:00 UTC). | Optional: adjust `weekday`, `hour`, `minute`. |
+| 2 | **Manual Trigger** | Webhook for on-demand runs (e.g., Slack slash command). | POST JSON body to override defaults (lookback days, sources, strategy text, etc.). |
+| 3 | **Run Metadata** | Normalises run configuration and injects defaults (sources, scoring thresholds, LLM provider/model, notification channels, Beehiiv publication ID). | Reads webhook body + env vars. Update the default source lists here. |
+| 4 | **Discover Content** | Fetches YouTube videos (Data API + transcript endpoint) and engineering/AI blog posts (RSS → HTML scrape). Returns one item per discovery with embedded config. | Requires `YOUTUBE_API_KEY`. Uses `$httpRequest` internally. |
+| 5 | **Normalize & Deduplicate** | Cleans text, strips boilerplate, and removes duplicates using token overlap heuristics. | Produces cleaned items; carries forward `__config` and discovery logs. |
+| 6 | **Score & Rank** | Calls Anthropic or OpenAI (based on config) to score content against the rubric (audience fit, practicality, originality, freshness, brand safety). | Needs `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Output includes score, breakdown, and rationale. |
+| 7 | **Aggregate Results** | Splits items into `passed`, `flagged`, and `dropped` collections. | Config thresholds (`min`, `review`) taken from metadata. |
+| 8 | **Flagged Items?** | Checks for manual-review items and, if present, routes them to Slack. | |
+| 9 | **Slack Flagged Review** | Posts flagged items (scores 50–59) to the review channel with score + rationale. | Configure Slack credentials and review channel in metadata or env vars. |
+| 10 | **Any Passed?** | Determines whether any items cleared the auto-publish threshold. | True → continue pipeline. False → trigger “No Draft Alert”. |
+| 11 | **No Draft Alert** | Notifies the editorial channel when no items passed scoring (includes flagged count). | Slack credentials required. |
+| 12 | **Generate Summaries** | Produces deep structured summaries for the top K items (TL;DR, Why It Matters, actionable bullets, risks, social copy, SEO metadata). | Uses same LLM provider/model as scoring. |
+| 13 | **Assemble Draft** | Builds the full newsletter draft (hook, top picks, playbook tip, quick hits, CTA) in Markdown + Beehiiv HTML while mimicking brand voice. | Injects strategy/tone/personality text supplied via metadata/webhook. |
+| 14 | **Quality & Outputs** | Runs quality gates (length checks, link validation) and prepares Slack message, Beehiiv payload, and archive bundle (`$json.archive`). | |
+| 15 | **Beehiiv Draft** | Conditionally pushes the draft via Beehiiv API (`/v2/publications/{id}/drafts`). Skips gracefully if credentials are missing. | Requires `BEEHIIV_API_KEY` + publication ID (env or metadata). |
+| 16 | **Slack Digest** | Sends final status (top picks + Beehiiv status) to the newsletter alerts channel. | Slack credentials. |
+| 17 | **Archive to DB (configure)** *(disabled placeholder)* | Attach your datastore node (Airtable, Notion, Postgres) here and use `{{$json.archive}}`. | Enable and configure to persist items/summaries/quality reports. |
 
-2. **Context Warm-Up**
-   - `Google Drive` / `Notion` nodes to fetch the latest Strategy Report, Tone of Voice Report, and Personality Notes.
-   - `IF` node ensures all required context files exist; otherwise routes to Slack alert.
+## Required Credentials & Environment Vars
 
-3. **Discovery Sub-Workflow**
-   - `Execute Command` or `HTTP Request` nodes that call the CLI’s discovery endpoints (or direct API integrations).
-   - YouTube stage uses the YouTube Data API node; blog stage uses RSS fetch nodes.
-   - Combined payloads stored in `Items` collection and forwarded.
+Set these in n8n’s credential store or via environment variables referenced by the Function nodes:
 
-4. **Normalization & Deduplication**
-   - `Code` node (JavaScript) leveraging the token sort ratio snippet provided in the JSON export.
-   - Deduplicated list persisted to Airtable/Notion via connectors.
+- `YOUTUBE_API_KEY` — YouTube Data API v3 key.
+- `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` — choose one provider and set `LLM_PROVIDER` / `LLM_MODEL` if you want different defaults.
+- `BEEHIIV_API_KEY` & `BEEHIIV_PUBLICATION_ID` — optional; if absent the workflow skips the Beehiiv call but still delivers the draft markdown/HTML.
+- Slack OAuth or webhook credentials — used by `Slack Flagged Review`, `Slack Digest`, and `No Draft Alert`.
+- Optional: `SLACK_NEWSLETTER_CHANNEL`, `SLACK_REVIEW_CHANNEL`, `DEFAULT_LOOKBACK_DAYS`, `LLM_PROVIDER`, `LLM_MODEL`.
 
-5. **Scoring Stage**
-   - `OpenAI` / `HTTP Request` node pointing at Anthropic’s Messages API (depending on provider).
-   - `SplitInBatches` + `Wait` nodes to respect rate limits.
-   - Branch: `IF` node routes items scoring 50–59 to a Slack approval thread.
+## Customising Inputs
 
-6. **Summaries Stage**
-   - Batched LLM calls generating structured summaries; the JSON schema is enforced via `Function` nodes before persisting to datastore.
-   - `Set` node keeps only the top `top_k` items as defined in config.
+- **Webhook payload overrides** — send JSON fields such as `lookback_days`, `youtube_channels`, `blog_feeds`, `strategy_text`, `tone_text`, `personality_text`, `min_score`, `manual_review_floor`, `top_k`, `slack_channel`, or `flagged_channel`.
+- **Reference assets** — upstream nodes (Google Drive, Notion, etc.) can fetch documents, then pass their text into the webhook payload before hitting `Run Metadata`.
+- **Sources** — edit the default arrays inside `Run Metadata` or supply new ones via payload for non-technical updates.
 
-7. **Assembly Stage**
-   - `Execute Command` node calling `python -m newsletter_agent.cli assemble ...` or direct LLM call producing Markdown + Beehiiv HTML.
-   - Reference newsletter files loaded from Google Drive and injected as binary data for prompt context.
+## Human-in-the-Loop Touchpoints
 
-8. **Quality Gates**
-   - `HTTP Request` node for link validation (HEAD requests).
-   - `Function` node for TL;DR length checks and CTA validation.
-   - `Merge` node collates pass/fail results into a quality report.
+- **Flagged review** — node 9 posts borderline items for manual decision. Approve/Reject can be handled by adding a “Wait for Webhook” branch that reinjects approved URLs into the pipeline.
+- **Editorial approval** — extend the workflow after `Slack Digest` with an approval button (Slack interactivity) if you want the draft to pause before notifying the wider team.
+- **Strategy refresh** — create a separate n8n workflow that regenerates strategy/tone reports and stores them; feed the latest text into the webhook payload.
 
-9. **Delivery & Notifications**
-   - `Beehiiv` API node (POST `/v2/publications/{id}/drafts`) using API key from credentials store.
-   - `Slack` node posts draft link, top picks, and quality summary.
-   - `Email` node sends digest to the editorial team.
+## Scaling & Reliability Tips
 
-10. **Archival**
-    - `Airtable` or `Postgres` nodes persist items, summaries, newsletter JSON, and quality report.
-    - `Google Drive` node saves Markdown + HTML backups.
+- **Rate limits** — the Function nodes already sequence requests; if you hit rate limits, add `Wait` nodes or throttle using `$sleep()` inside the functions.
+- **Retries** — wrap high-risk HTTP calls (YouTube, RSS, Beehiiv) in try/catch (already done) and log to Slack or a monitoring channel via an additional branch.
+- **Observability** — extend the workflow to push `$json.qualityReport` into Langfuse/PromptMetheus or your analytics stack.
+- **Archival** — connect the placeholder Set node to Airtable/Notion/Postgres to keep a queryable history of discoveries, summaries, drafts, and quality results.
 
-## Human-in-the-loop Touchpoints
+## Testing Checklist
 
-- **Strategy Approval** — After the onboarding prompt run, send report to Slack with “Approve / Revise” buttons. Use `Wait for Webhook` to pause the workflow until approved.
-- **Borderline Items Review** — Items scoring between 50–59 are posted to a Slack thread with Approve/Snooze buttons. Approved links are reinjected into the pipeline via a webhook.
-- **Final Editorial Review** — The Beehiiv draft link is posted with a “Mark as Approved” button; the workflow only notifies the wider team once approved.
-
-## Environment & Secrets
-
-Configure the following credentials in N8N:
-- `YOUTUBE_API_KEY`
-- `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`
-- `BEEHIIV_API_KEY` and `publication_id`
-- Slack webhook / bot token
-- Airtable API key & base ID (if used)
-- Google Drive service account (for reference documents)
-
-## Scaling Considerations
-
-- Use `SplitInBatches` with concurrency controls to respect LLM rate limits.
-- Persist intermediate outputs (items, summaries) to a database so failed runs can resume without repeating earlier stages.
-- Add retry + error branches (`Error Workflow`) to handle transient API failures gracefully.
-- Instrument with Langfuse or PromptMetheus by logging prompt IDs and timings in dedicated nodes.
-
-## Customization Checklist
-
-1. Replace placeholder channel/feed IDs in the configuration sheet or `default_config.yaml`.
-2. Update the Beehiiv publication ID and Slack channels in the workflow.
-3. Upload 3–5 reference newsletters (PDF/Markdown) to your storage provider; update file IDs in the “Context Warm-Up” section.
-4. Connect the manual insights intake (e.g., voice notes via Whisper Flow) by adding a branch that appends manual insights to the discovery payload.
-5. Test each stage individually in N8N’s “Execute Node” mode before enabling the full schedule.
+1. Import the workflow and wire credentials (YouTube, LLM provider, Slack). Leave Beehiiv unset for dry runs.
+2. Trigger manually with a webhook payload containing `lookback_days: 1` to limit scope while testing.
+3. Verify Slack messages for flagged items, draft digest, and “no draft” scenario by temporarily setting high thresholds.
+4. Once satisfied, enable the cron trigger and the optional Beehiiv node.
+5. Integrate your datastore by enabling “Archive to DB (configure)” and replacing it with the connector of your choice.

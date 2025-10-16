@@ -1,98 +1,89 @@
 # Abhi's AI Playbook — Newsletter Agent
 
-End-to-end automation for discovering, scoring, summarizing, and drafting the Abhi's AI Playbook newsletter. The system mirrors Ben's AI newsletter agency workflow and is designed to cut manual curation time by 80%+ while protecting editorial quality and voice.
+End-to-end automation for discovering, scoring, summarising, and drafting Abhi’s AI Playbook. The workflow mirrors Ben’s AI newsletter agency methodology and now runs **entirely inside n8n**—no external runtime required (the Python toolkit remains available for optional CLI runs).
 
 ## Key Capabilities
-- **Automated discovery** of YouTube channels and engineering/AI blogs with configurable lookback windows.
-- **LLM scoring pipeline** that ranks content for audience fit, practicality, originality, freshness, and brand safety.
-- **Deep structured summaries** with TL;DRs, why-it-matters, actionable takeaways, risks, social copy, SEO metadata, and timestamps.
-- **Newsletter assembly** that mimics reference newsletter tone and structure while generating Markdown + Beehiiv-ready HTML drafts.
-- **Quality gates & notifications** covering length limits, link validation, CTA presence, and Slack/email digests.
-- **Pluggable storage** (local JSON by default, ready for Airtable/Notion/DB integrations) with archival of items, summaries, drafts, and quality reports.
+- **Automated discovery** of configurable YouTube channels and engineering/AI blogs (RSS/HTML parsing + transcript fallback).
+- **LLM scoring engine** that ranks content against audience fit, practicality, originality, freshness, and brand safety, complete with rationales.
+- **Deep structured summaries** (TL;DR, Why It Matters, actionable steps, risks, social copy, SEO metadata, timestamps).
+- **Reference-style assembly** that mimics target newsletters while weaving in brand strategy, tone, and personal context.
+- **Quality gates & notifications** for length limits, link validation, CTA presence, Beehiiv status, and Slack digests.
+- **Archive-ready payloads** for Airtable/Notion/Postgres, plus optional Beehiiv draft publishing.
 
-## Project Layout
+## Repository Layout
 ```
 ├── README.md
-├── requirements.txt
-├── system-prompt.txt
-├── config/
-│   └── default_config.yaml      # Non-technical configuration for sources, scoring, LLM, storage, notifications
+├── system-prompt.txt                    # Master system prompt that informed the build
 ├── docs/
-│   ├── architecture.md          # System architecture overview and component map
-│   └── orchestration.md         # N8N workflow guidance & human-in-the-loop checkpoints
-├── src/newsletter_agent/
-│   ├── cli.py                   # Typer CLI orchestrator
-│   ├── config.py                # YAML settings loader
-│   ├── schemas.py               # Data contracts (Item, Summary, Newsletter)
-│   ├── discovery/               # YouTube + blog discovery modules
-│   ├── pipeline/                # Normalize, scoring, summaries, assembly, quality gates
-│   ├── storage/                 # Local JSON datastore (extensible)
-│   ├── notifiers/               # Slack + email notifications
-│   └── utils/                   # Logging, text helpers, LLM client abstraction
+│   ├── architecture.md                  # Architecture reference (n8n-first + optional Python toolkit)
+│   ├── orchestration.md                 # Node-by-node n8n guidance
+│   └── operations.md                    # Setup, daily ops, troubleshooting
+├── src/newsletter_agent/                # Optional Python toolkit (CLI, data contracts, prompt templates)
 └── workflows/
-    └── n8n-newsletter-workflow.json  # Visual workflow blueprint for production automation
+    └── n8n-newsletter-workflow.json     # Pure n8n implementation of the full pipeline
 ```
 
-## Quickstart
-1. **Install dependencies**
-   ```bash
-   python -m venv .venv && source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
-2. **Set environment variables**
-   ```bash
-   export YOUTUBE_API_KEY=...
-   export ANTHROPIC_API_KEY=...        # or OPENAI_API_KEY if switching providers
-   export NEWSLETTER_SLACK_WEBHOOK=... # optional, for Slack notifications
-   ```
-3. **Update configuration**
-   - Edit `config/default_config.yaml` to adjust sources, scoring thresholds, LLM provider/model, notification recipients, and Beehiiv settings.
-   - Optionally copy this file to `~/.newsletter-agent-config.yaml` for machine-wide defaults.
+## Quickstart (n8n Pipeline)
+1. **Import the workflow**
+   - Upload `workflows/n8n-newsletter-workflow.json` to your n8n instance.
+   - Attach credentials for YouTube (`YOUTUBE_API_KEY`), Anthropic/OpenAI, Slack, and (optionally) Beehiiv.
 
-4. **Prepare strategy assets**
-   - Generate/upload:
-     - Newsletter Strategy Report (company positioning, ICP, value pillars).
-     - Writing Framework / Tone of Voice report (style, language patterns).
-     - Personality context notes (personal stories, professional background).
-   - Store them as Markdown or text files to pass into the `cli.py` run.
+2. **Configure defaults**
+   - `Run Metadata` sets default channels, feeds, scoring thresholds, LLM provider/model, notification channels, and Beehiiv publication ID. Update the arrays or override via webhook payload.
+   - Provide strategy/tone/personality text via the webhook request body or by inserting upstream nodes (Google Drive/Notion fetch → Function → `Run Metadata`).
 
-5. **Run the pipeline**
-   ```bash
-   python -m newsletter_agent.cli run \
-     --issue-number 1 \
-     --issue-date 2024-07-07 \
-     --strategy docs/strategy-report.md \
-     --tone docs/writing-framework.md \
-     --personality docs/persona-notes.md
-   ```
+3. **Test via webhook**
+   - POST to the `Manual Trigger` endpoint with a JSON body:
+     ```json
+     {
+       "issue_number": 42,
+       "issue_date": "2024-07-07",
+       "lookback_days": 3,
+       "strategy_text": "...",
+       "tone_text": "...",
+       "personality_text": "..."
+     }
+     ```
+   - Confirm:
+     - `Slack Flagged Review` posts borderline items (scores 50–59).
+     - `Slack Digest` announces the draft.
+     - Beehiiv draft is created when credentials are present (otherwise the workflow reports it skipped).
 
-6. **Review outputs**
-   - `data/items.json` — normalized discovery items with metadata.
-   - `data/summaries.json` — deep summaries for top picks.
-   - `data/issue-<num>-<date>/newsletter.md` — Markdown draft.
-   - `data/issue-<num>-<date>/beehiiv.html` — Beehiiv-ready HTML.
-   - `data/quality_report.json` — quality gate results.
-   - `data/flagged_items.json` — items requiring manual review (scores 50–59).
+4. **Schedule**
+   - Enable the `Weekly Schedule` node (defaults to Sunday 06:00 UTC) once manual runs look good.
 
-## Orchestration Options
-- **N8N (recommended)** — Import `workflows/n8n-newsletter-workflow.json` to get a ready-to-configure pipeline with schedule trigger, manual approval nodes, and stage-specific sub-workflows.
-- **CLI / Cron** — Use `python -m newsletter_agent.cli run ...` in CI/CD, cron, or Prefect/Temporal if you prefer code-based orchestration.
+5. **Archive (optional)**
+   - Replace the disabled “Archive to DB (configure)” node with Airtable/Notion/Postgres connectors. Use `{{$json.archive}}` to persist discoveries, summaries, quality report, markdown, and Beehiiv payload per run.
+
+## Optional CLI Workflow
+The Python toolkit mirrors the same prompts and data contracts for teams that prefer code-first automation or need local testing.
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export YOUTUBE_API_KEY=...
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY
+python -m newsletter_agent.cli run --issue-number 42 --issue-date 2024-07-07
+```
+
+Outputs are written to `data/` (items, summaries, draft markdown/HTML, quality report, flagged items).
 
 ## Extensibility
-- **Sources** — Add/remove YouTube channels and blog feeds via `config/default_config.yaml` or an external sheet synced into the config loader.
-- **Storage** — Swap `LocalJSONStore` for Airtable, Postgres, or Notion by adding a new class implementing `BaseDatastore`.
-- **Notifications** — Extend `src/newsletter_agent/notifiers` with additional channels (e.g., Telegram, Teams).
-- **LLM Provider** — Toggle between Anthropic and OpenAI by changing the `llm` block in config and exporting the appropriate API key environment variable.
-- **Prompt Experimentation** — The prompt templates in `pipeline/scoring.py`, `pipeline/summaries.py`, and `pipeline/assembly.py` are centralized; connect them to Langfuse/PromptMetheus for versioning and A/B testing.
+- **Sources** — Update `Run Metadata` or pass new JSON payloads to add/remove YouTube channels and blog feeds (tags are preserved for analytics).
+- **Notifications** — Attach additional nodes (Teams, Email, Telegram) after `Quality & Outputs` using the provided Slack payload as a template.
+- **Storage** — Use the archive payload to upsert records into Airtable/Notion/Postgres for historical analytics.
+- **LLM provider/model** — Toggle via env vars (`LLM_PROVIDER`, `LLM_MODEL`) or webhook payload fields; Anthropic and OpenAI are supported out-of-the-box.
+- **Prompt experimentation** — Prompts live inside the relevant Function nodes (`Score & Rank`, `Generate Summaries`, `Assemble Draft`). Copy them into Langfuse/PromptMetheus for A/B testing.
 
 ## Troubleshooting
-- **Missing API keys** — The CLI will raise explicit errors if required keys (YouTube, LLM, Beehiiv) are absent. Confirm they are exported in the shell or the hosting platform’s secret manager.
-- **LLM JSON parsing issues** — Outputs are validated; failures are logged with the offending item ID. Adjust temperature or refine prompts if hallucinations occur.
-- **Discovery gaps** — Increase `sources.schedule.lookback_days` or inspect channel/feed IDs. For blogs without RSS, integrate a scraper and register it in `discovery/`.
-- **Link validation errors** — `quality.py` performs `HEAD` requests; some sites block them. Modify `_validate_links` to fall back to `GET` if required.
+- **No discoveries** — Validate `YOUTUBE_API_KEY`, channel IDs, and feed URLs; adjust `lookback_days`.
+- **LLM JSON errors** — Reduce temperature or raise `max_tokens` in the Function node; inspect the execution log to see the offending item.
+- **Slack messages missing** — Ensure Slack credentials/channel env vars are set for `Slack Flagged Review`, `Slack Digest`, and `No Draft Alert`.
+- **Beehiiv draft skipped** — Confirm `BEEHIIV_API_KEY`, publication ID, and that `assembly.beehiiv_html` is non-empty.
+- **Link validation fails** — Some sites block `HEAD`; the workflow already falls back to `GET`, but you can tweak timeouts in `Quality & Outputs`.
 
 ## Next Steps
-1. Connect the N8N workflow to production credentials and set schedule/manual triggers.
-2. Wire up Beehiiv API calls inside `assembly` or a dedicated delivery module.
-3. Add persistence adapters for Airtable/Notion and integrate Langfuse prompt analytics.
-4. Expand the quality gate suite with factual verification via retrieval or source quoting.
+1. Connect the archive payload to your CRM/BI tool for historical trend analysis.
+2. Add Langfuse/PromptMetheus hooks to track scoring/summarisation prompt performance.
+3. Layer factual verification or RAG lookups before publishing.
+4. Extend the workflow with branded image generation (Midjourney/Runway) using the reference imagery you collected during onboarding.
