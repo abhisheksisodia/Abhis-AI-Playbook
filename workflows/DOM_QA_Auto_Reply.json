@@ -1,0 +1,194 @@
+{
+  "name": "DOM_QA_Auto_Reply",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 280]
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.map(item => {\n  const payload = item.json.payload || item.json;\n  if (!payload.client_id) throw new Error('client_id missing');\n  item.json = payload;\n  item.json.idempotency_key = crypto.createHash('sha256').update(`${payload.client_id}|${payload.thread_id || Date.now()}`).digest('hex');\n  return item;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [220, 280]
+    },
+    {
+      "parameters": {
+        "sheetId": "={{$env.SHEETS_FAQS_ID}}",
+        "range": "faqs!A:D"
+      },
+      "name": "Load FAQs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [440, 120],
+      "credentials": {
+        "googleSheetsOAuth2Api": "OBS Google Sheets"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const rows = $items('Load FAQs', 0, 0);\nconst headers = rows.shift().json;\nconst faqs = rows.map(r => r.json);\nitem.json.faq_context = faqs.map(f => `Q: ${f.question}\nA: ${f.answer}\nSource: ${f.drive_link}`).join('\n\n');\nreturn item;"
+      },
+      "name": "Prepare FAQ Context",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [660, 280]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "mode": "json",
+        "jsonSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"answer_markdown\": {\n      \"type\": \"string\"\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"minimum\": 0,\n      \"maximum\": 1\n    },\n    \"citations\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"title\": {\n            \"type\": \"string\"\n          },\n          \"url\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\"title\", \"url\"]\n      }\n    }\n  },\n  \"required\": [\"answer_markdown\", \"confidence\"],\n  \"additionalProperties\": false\n}",
+        "instructions": "Use provided FAQ context to answer onboarding question.",
+        "input": "Context:\n{{$json.faq_context}}\n\nQuestion:\n{{$json.question_text}}"
+      },
+      "name": "Generate Answer",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [880, 280],
+      "credentials": {
+        "openAiApi": "OBS OpenAI"
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.data.confidence}}",
+              "operation": "larger",
+              "value2": 0.6
+            }
+          ]
+        }
+      },
+      "name": "Confidence OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1100, 280]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "={{$env.GMAIL_ALIAS}}",
+        "toList": [
+          "={{$json.recipient_email}}"
+        ],
+        "subject": "Answer to your onboarding question",
+        "message": "={{$json.data.answer_markdown}}\n\nCitations:\n{{$json.data.citations.map(c => `• ${c.title}: ${c.url}`).join('\\n')}}"
+      },
+      "name": "Send Answer",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1320, 180],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": "DOM_Escalation",
+        "options": {
+          "waitTillCalledOnce": true
+        }
+      },
+      "name": "Escalate",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1320, 420]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Prepare FAQ Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load FAQs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load FAQs": {
+      "main": [
+        [
+          {
+            "node": "Prepare FAQ Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare FAQ Context": {
+      "main": [
+        [
+          {
+            "node": "Generate Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Answer": {
+      "main": [
+        [
+          {
+            "node": "Confidence OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confidence OK?": {
+      "main": [
+        [
+          {
+            "node": "Send Answer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escalate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "DOM_QA_Auto_Reply",
+  "versionId": "DOM_QA_Auto_Reply_v1"
+}

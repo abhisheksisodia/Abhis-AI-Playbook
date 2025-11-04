@@ -1,0 +1,432 @@
+{
+  "name": "DOM_New_Client_Intake",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 420]
+    },
+    {
+      "parameters": {
+        "path": "dom/new-client-intake",
+        "responseMode": "lastNode",
+        "responseData": "firstEntryJson",
+        "options": {
+          "responseCode": 200,
+          "responseContentType": "application/json"
+        }
+      },
+      "name": "CRM Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [0, 200]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "name": "Merge Trigger",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.map(item => {\n  const clientId = item.json.client_id || item.json.id || item.json.body?.client_id;\n  const key = clientId || `${item.json.contact_email}|${Date.now()}`;\n  item.json.client_id = clientId || item.json.body?.client_id;\n  item.json.idempotency_key = crypto.createHash('sha256').update(key).digest('hex');\n  return item;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO clients (id, org_name, contact_name, contact_email, contact_phone, segment, status, created_at, updated_at)\nVALUES ($1, $2, $3, $4, $5, $6, 'NEW', NOW(), NOW())\nON CONFLICT (id) DO UPDATE\nSET org_name = EXCLUDED.org_name, contact_name = EXCLUDED.contact_name, contact_email = EXCLUDED.contact_email, contact_phone = EXCLUDED.contact_phone, segment = EXCLUDED.segment, status = 'NEW', updated_at = NOW()\nRETURNING *;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id || $json.body?.client_id || $json.query?.client_id}}"
+            },
+            {
+              "name": "value2",
+              "value": "={{$json.org_name || $json.body?.org_name}}"
+            },
+            {
+              "name": "value3",
+              "value": "={{$json.contact_name || $json.body?.contact_name}}"
+            },
+            {
+              "name": "value4",
+              "value": "={{$json.contact_email || $json.body?.contact_email}}"
+            },
+            {
+              "name": "value5",
+              "value": "={{$json.contact_phone || $json.body?.contact_phone}}"
+            },
+            {
+              "name": "value6",
+              "value": "={{$json.segment || $json.body?.segment || 'default'}}"
+            }
+          ]
+        }
+      },
+      "name": "Upsert Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "sheetId": "={{$env.SHEETS_PLAYBOOK_ID}}",
+        "range": "playbooks!A:G",
+        "options": {
+          "valueRenderMode": "UNFORMATTED_VALUE"
+        }
+      },
+      "name": "Fetch Playbook",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [880, 120],
+      "credentials": {
+        "googleSheetsOAuth2Api": "OBS Google Sheets"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const rows = $items('Fetch Playbook', 0, 0).map(item => item.json);\nconst headers = rows.shift();\nconst match = rows.find(r => r[0] === ($json.segment || 'default'));\nif (!match) throw new Error('Playbook not found for segment');\nconst playbook = headers.reduce((acc, key, idx) => { acc[key] = match[idx]; return acc; }, {});\nitem.json.playbook = playbook;\nreturn item;"
+      },
+      "name": "Select Playbook",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "createFolder",
+        "name": "={{$json.client_id}}_{{$json.org_name || 'Org'}}",
+        "parentId": "={{$env.DRIVE_SHARED_DRIVE_ID}}",
+        "options": {
+          "useServiceAccount": true
+        }
+      },
+      "name": "Create Client Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 2,
+      "position": [1320, 120],
+      "credentials": {
+        "googleApi": "OBS Google Drive"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const requiredDocs = JSON.parse($json.playbook.required_docs_json || '[]');\nconst folderId = $json.drive_folder_id;\nconst subfolders = requiredDocs.map(doc => ({ name: doc, parentId: folderId }));\nreturn subfolders.map(sub => ({ json: { doc_type: sub.name, parentId: sub.parentId } }));"
+      },
+      "name": "Prepare Subfolders",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "createFolder",
+        "name": "={{$json.doc_type}}",
+        "parentId": "={{$json.parentId}}",
+        "options": {
+          "useServiceAccount": true
+        }
+      },
+      "name": "Create Doc Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 2,
+      "position": [1760, 300],
+      "credentials": {
+        "googleApi": "OBS Google Drive"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const portalBase = $env.APP_BASE_URL || 'https://obs.example.com';\nconst requiredDocs = JSON.parse($json.playbook.required_docs_json || '[]');\nitem.json.upload_links = requiredDocs.map(doc => ({\n  doc_type: doc,\n  upload_url: `${portalBase}/upload/${$json.client_id}/${doc}`\n}));\nreturn item;"
+      },
+      "name": "Generate Upload Links",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1320, 500]
+    },
+    {
+      "parameters": {
+        "sheetId": "={{$env.SHEETS_TEMPLATES_ID}}",
+        "range": "templates!A:D"
+      },
+      "name": "Load Templates",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [1540, 500],
+      "credentials": {
+        "googleSheetsOAuth2Api": "OBS Google Sheets"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const rows = $items('Load Templates', 0, 0);\nconst headers = rows.shift().json;\nconst templateRow = rows.find(r => r.json.key === 'intro_email');\nif (!templateRow) throw new Error('Intro template missing');\nconst template = templateRow.json;\nitem.json.email_template = template;\nreturn item;"
+      },
+      "name": "Select Template",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1760, 500]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "={{$env.GMAIL_ALIAS}}",
+        "toList": [
+          "={{$json.contact_email}}"
+        ],
+        "subject": "={{$json.email_template.subject}}",
+        "message": "={{$json.email_template.body_markdown}}\n\nUpload Links:\n{{$json.upload_links.map(u => `• ${u.doc_type}: ${u.upload_url}`).join('\\n')}}"
+      },
+      "name": "Send Intro Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1980, 500],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE clients SET status = 'INTAKE_PENDING', updated_at = NOW() WHERE id = $1 RETURNING status;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Update Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2200, 500],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "modifyLabels",
+        "messageId": "={{$json.lastMessageId || $json.emailId}}",
+        "labelIds": [
+          "OBS/INTAKE_PENDING"
+        ]
+      },
+      "name": "Label Thread",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2420, 500],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    }
+  ],
+  "connections": {
+    "CRM Webhook": {
+      "main": [
+        [
+          {
+            "node": "Merge Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Merge Trigger",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Trigger": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Upsert Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Client": {
+      "main": [
+        [
+          {
+            "node": "Select Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Client Folder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Upload Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Playbook": {
+      "main": [
+        [
+          {
+            "node": "Select Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Playbook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Subfolders",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Upload Links",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Templates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Client Folder": {
+      "main": [
+        [
+          {
+            "node": "Prepare Subfolders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Subfolders": {
+      "main": [
+        [
+          {
+            "node": "Create Doc Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Upload Links": {
+      "main": [
+        [
+          {
+            "node": "Send Intro Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Templates": {
+      "main": [
+        [
+          {
+            "node": "Select Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Template": {
+      "main": [
+        [
+          {
+            "node": "Send Intro Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Intro Email": {
+      "main": [
+        [
+          {
+            "node": "Update Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status": {
+      "main": [
+        [
+          {
+            "node": "Label Thread",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "DOM_New_Client_Intake",
+  "versionId": "DOM_New_Client_Intake_v1"
+}

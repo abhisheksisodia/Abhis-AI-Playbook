@@ -1,0 +1,2 @@
+segment,version,work_hours_json,tz,required_docs_json,cadences_json,slas_json
+default,v1,"{\"monday\":[\"09:00-17:00\"],\"tuesday\":[\"09:00-17:00\"],\"wednesday\":[\"09:00-17:00\"],\"thursday\":[\"09:00-17:00\"],\"friday\":[\"09:00-15:00\"]}",America/Los_Angeles,"[\"business_license\",\"id_front\",\"floor_plan\"]","{\"doc_chase\":[\"P+2d\",\"P+5d\",\"P+9d\"],\"training\":[\"D-3d\",\"D-1d\",\"H-1h\"]}","{\"first_response_hours\":4,\"doc_validation_hours\":24}"

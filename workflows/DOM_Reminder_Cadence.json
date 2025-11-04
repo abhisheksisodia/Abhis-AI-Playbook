@@ -1,0 +1,274 @@
+{
+  "name": "DOM_Reminder_Cadence",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 280]
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.map(item => {\n  const payload = item.json.payload || item.json;\n  if (!payload.client_id) throw new Error('client_id required');\n  item.json = payload;\n  item.json.idempotency_key = crypto.createHash('sha256').update(`${payload.client_id}|${payload.cadence_type}`).digest('hex');\n  return item;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [220, 280]
+    },
+    {
+      "parameters": {
+        "sheetId": "={{$env.SHEETS_PLAYBOOK_ID}}",
+        "range": "playbooks!A:G"
+      },
+      "name": "Fetch Playbook",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [440, 120],
+      "credentials": {
+        "googleSheetsOAuth2Api": "OBS Google Sheets"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT segment, contact_email FROM clients WHERE id = $1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Load Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [440, 440],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const rows = $items('Fetch Playbook', 0, 0);\nconst headers = rows.shift().json;\nconst client = $items('Load Client')[0].json;\nconst match = rows.map(r => r.json).find(r => r.segment === client.segment);\nif (!match) throw new Error('Playbook missing');\nconst pb = headers.reduce((acc, key, idx) => { acc[key] = match[key]; return acc; }, {});\nitem.json.playbook = pb;\nreturn item;"
+      },
+      "name": "Select Playbook",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [660, 280]
+    },
+    {
+      "parameters": {
+        "functionCode": "const cadences = JSON.parse($json.playbook.cadences_json || '{}');\nconst cadence = cadences[$json.cadence_type] || [];\nitem.json.cadence_offsets = cadence;\nreturn item;"
+      },
+      "name": "Extract Cadence",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [880, 280]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "cadence_offsets"
+      },
+      "name": "Split Waits",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [1100, 280]
+    },
+    {
+      "parameters": {
+        "functionCode": "const offset = $json.value;\nconst base = new Date();\nitem.json.wait_duration = offset;\nconst templateKey = $json.cadence_type === 'doc_chase' ? 'doc_reminder' : 'training_reminder';\nitem.json.template_key = templateKey;\nreturn item;"
+      },
+      "name": "Prepare Reminder",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1320, 280]
+    },
+    {
+      "parameters": {
+        "waitTime": 1,
+        "unit": "minutes"
+      },
+      "name": "Wait Node",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1540, 280]
+    },
+    {
+      "parameters": {
+        "sheetId": "={{$env.SHEETS_TEMPLATES_ID}}",
+        "range": "templates!A:D"
+      },
+      "name": "Templates Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [1760, 120],
+      "credentials": {
+        "googleSheetsOAuth2Api": "OBS Google Sheets"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const rows = $items('Templates Sheet', 0, 0);\nrows.shift();\nconst template = rows.map(r => r.json).find(r => r.key === $json.template_key);\nif (!template) throw new Error('Template missing');\nitem.json.email_template = template;\nreturn item;"
+      },
+      "name": "Select Template",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1760, 280]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "={{$env.GMAIL_ALIAS}}",
+        "toList": [
+          "={{$items('Load Client')[0].json.contact_email}}"
+        ],
+        "subject": "={{$json.email_template.subject}}",
+        "message": "={{$json.email_template.body_markdown}}"
+      },
+      "name": "Send Reminder",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1980, 280],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Fetch Playbook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Load Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Playbook": {
+      "main": [
+        [
+          {
+            "node": "Select Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Client": {
+      "main": [
+        [
+          {
+            "node": "Select Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Playbook": {
+      "main": [
+        [
+          {
+            "node": "Extract Cadence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Cadence": {
+      "main": [
+        [
+          {
+            "node": "Split Waits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Waits": {
+      "main": [
+        [
+          {
+            "node": "Prepare Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Reminder": {
+      "main": [
+        [
+          {
+            "node": "Wait Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Node": {
+      "main": [
+        [
+          {
+            "node": "Select Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Templates Sheet": {
+      "main": [
+        [
+          {
+            "node": "Select Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Template": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "DOM_Reminder_Cadence",
+  "versionId": "DOM_Reminder_Cadence_v1"
+}

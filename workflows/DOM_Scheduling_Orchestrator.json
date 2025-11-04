@@ -1,0 +1,363 @@
+{
+  "name": "DOM_Scheduling_Orchestrator",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 320]
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.map(item => {\n  const payload = item.json.payload || item.json;\n  if (!payload.client_id) throw new Error('client_id required');\n  item.json = payload;\n  item.json.idempotency_key = crypto.createHash('sha256').update(`${payload.client_id}|${payload.intent || 'schedule'}`).digest('hex');\n  return item;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [220, 320]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, contact_name, contact_email, segment FROM clients WHERE id = $1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Load Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [440, 320],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "sheetId": "={{$env.SHEETS_PLAYBOOK_ID}}",
+        "range": "playbooks!A:G"
+      },
+      "name": "Fetch Playbook",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [660, 160],
+      "credentials": {
+        "googleSheetsOAuth2Api": "OBS Google Sheets"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const rows = $items('Fetch Playbook', 0, 0);\nconst headers = rows.shift().json;\nconst client = $items('Load Client')[0].json;\nconst match = rows.map(r => r.json).find(r => r.segment === client.segment);\nif (!match) throw new Error('Playbook missing');\nconst pb = headers.reduce((acc, key, idx) => { acc[key] = match[key]; return acc; }, {});\nitem.json.playbook = pb;\nreturn item;"
+      },
+      "name": "Select Playbook",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [660, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.schedule_mode || $json.intent}}",
+              "operation": "contains",
+              "value2": "LINK"
+            }
+          ]
+        }
+      },
+      "name": "Link Booked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [880, 320]
+    },
+    {
+      "parameters": {
+        "functionCode": "const playbook = JSON.parse($json.playbook.work_hours_json || '{}');\nconst timezone = $json.playbook.tz || 'UTC';\nconst now = new Date();\nconst slots = [];\nfor (let i = 1; i <= 7; i++) {\n  const slot = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);\n  slot.setUTCHours(15, 0, 0, 0);\n  slots.push(slot.toISOString());\n  if (slots.length === 3) break;\n}\nitem.json.candidate_slots = slots;\nitem.json.timezone = timezone;\nreturn item;"
+      },
+      "name": "Build Candidate Slots",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1100, 120]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "={{$env.GMAIL_ALIAS}}",
+        "toList": [
+          "={{$items('Load Client')[0].json.contact_email}}"
+        ],
+        "subject": "Choose your onboarding session",
+        "message": "Hi {{$items('Load Client')[0].json.contact_name}},\\n\\nPlease choose one of the suggested times: {{$json.candidate_slots.join(', ')}} ({{$json.timezone}}). Reply with your preference."
+      },
+      "name": "Send Candidate Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1320, 120],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "operation": "create",
+        "calendar": "Primary",
+        "start": "={{$json.confirmed_start}}",
+        "end": "={{$json.confirmed_end}}",
+        "options": {
+          "conferenceDataVersion": 1,
+          "summary": "Onboarding Session - {{$items('Load Client')[0].json.org_name}}"
+        }
+      },
+      "name": "Create Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 2,
+      "position": [1100, 520],
+      "credentials": {
+        "googleCalendarOAuth2Api": "OBS Google Calendar"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "sessions",
+        "columns": [
+          "client_id",
+          "scheduled_at",
+          "duration_minutes",
+          "platform",
+          "calendar_event_id",
+          "status"
+        ],
+        "values": "={{JSON.stringify([$json.client_id, $json.confirmed_start, $json.duration_minutes || 60, $json.platform || 'Google Meet', $json.calendarEventId || $json.confirmed_event_id, 'SCHEDULED'])}}"
+      },
+      "name": "Insert Session Row",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1320, 520],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": "DOM_Reminder_Cadence",
+        "additionalFields": {
+          "data": "={{JSON.stringify({ client_id: $json.client_id, cadence_type: 'training' })}}"
+        },
+        "options": {
+          "waitTillCalledOnce": true
+        }
+      },
+      "name": "Start Training Cadence",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1540, 520]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE clients SET status = 'SCHEDULED', updated_at = NOW() WHERE id = $1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Update Client Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1760, 520],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "modifyLabels",
+        "messageId": "={{$json.messageId}}",
+        "labelIds": [
+          "OBS/SCHEDULED"
+        ]
+      },
+      "name": "Label Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1980, 520],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://booking.example.com/webhook",
+        "allowUnauthorizedCerts": true,
+        "options": {
+          "bodyContentType": "json"
+        }
+      },
+      "name": "Link Payload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1100, 360]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Load Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Client": {
+      "main": [
+        [
+          {
+            "node": "Select Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Playbook": {
+      "main": [
+        [
+          {
+            "node": "Select Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Playbook": {
+      "main": [
+        [
+          {
+            "node": "Link Booked?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Candidate Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link Booked?": {
+      "main": [
+        [
+          {
+            "node": "Link Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Candidate Slots": {
+      "main": [
+        [
+          {
+            "node": "Send Candidate Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Candidate Email": {
+      "main": [
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Insert Session Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Session Row": {
+      "main": [
+        [
+          {
+            "node": "Start Training Cadence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Training Cadence": {
+      "main": [
+        [
+          {
+            "node": "Update Client Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Client Status": {
+      "main": [
+        [
+          {
+            "node": "Label Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "DOM_Scheduling_Orchestrator",
+  "versionId": "DOM_Scheduling_Orchestrator_v1"
+}

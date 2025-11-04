@@ -1,0 +1,494 @@
+{
+  "name": "DOM_Doc_Intake_And_Validation",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "dom/doc-upload",
+        "responseMode": "lastNode",
+        "options": {
+          "responseContentType": "text/html"
+        }
+      },
+      "name": "Public Upload Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [0, 120]
+    },
+    {
+      "parameters": {
+        "triggerOn": "labelAdded",
+        "resource": "message",
+        "label": "OBS/DOCS_REQUESTED",
+        "additionalFields": {
+          "includeAttachments": true,
+          "format": "resolved"
+        }
+      },
+      "name": "Gmail Attachment Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 2,
+      "position": [0, 360],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "mode": "mergeByIndex"
+      },
+      "name": "Merge Inbound",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [220, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.map(item => {\n  const clientId = item.json.body?.client_id || item.json.client_id;\n  if (!clientId) throw new Error('client_id missing');\n  const docType = item.json.body?.doc_type || item.json.doc_type || 'unknown';\n  const sourceId = item.json.messageId || item.json.id || item.json.headers?.['Message-ID'];\n  const hashSource = `${clientId}|${docType}|${sourceId}`;\n  item.json.client_id = clientId;\n  item.json.doc_type = docType;\n  item.json.idempotency_key = crypto.createHash('sha256').update(hashSource).digest('hex');\n  return item;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [440, 240]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT drive_folder_id, contact_email FROM clients WHERE id = $1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Fetch Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [660, 120],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT drive_file_id FROM doc_requirements WHERE client_id = $1 AND doc_type = $2 ORDER BY id DESC LIMIT 1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            },
+            {
+              "name": "value2",
+              "value": "={{$json.doc_type}}"
+            }
+          ]
+        }
+      },
+      "name": "Fetch Requirement",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [660, 360],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "binaryPropertyName": "data",
+        "parents": [
+          "={{$items('Fetch Requirement')[0].json.drive_file_id || $items('Fetch Client')[0].json.drive_folder_id}}"
+        ],
+        "options": {
+          "useServiceAccount": true
+        }
+      },
+      "name": "Upload to Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 2,
+      "position": [880, 240],
+      "credentials": {
+        "googleApi": "OBS Google Drive"
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://example-security.local/scan",
+        "allowUnauthorizedCerts": true,
+        "options": {
+          "bodyContentType": "json"
+        },
+        "sendBody": true,
+        "bodyParametersJson": "={\n  \"client_id\": \"${$json.client_id}\",\n  \"doc_type\": \"${$json.doc_type}\",\n  \"drive_file_id\": \"${$json.googleFileId}\"\n}"
+      },
+      "name": "Virus Scan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1100, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "const mimeType = item.binary?.data?.mimeType || item.json.mimeType || '';\nitem.json.mimeType = mimeType;\nreturn item;"
+      },
+      "name": "Detect Mime",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1320, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.mimeType}}",
+              "operation": "contains",
+              "value2": "pdf"
+            }
+          ]
+        }
+      },
+      "name": "Is PDF?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1540, 240]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "mode": "json",
+        "jsonSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"fields\": {\n      \"type\": \"object\",\n      \"additionalProperties\": true\n    }\n  },\n  \"required\": [\"fields\"],\n  \"additionalProperties\": false\n}",
+        "instructions": "Extract structured values from onboarding PDF using checklist rules." ,
+        "input": "={{$json.text || ''}}"
+      },
+      "name": "PDF Extract",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [1760, 120],
+      "credentials": {
+        "openAiApi": "OBS OpenAI"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "documentId": "={{$json.googleFileId}}",
+        "additionalFields": {}
+      },
+      "name": "Vision OCR",
+      "type": "n8n-nodes-base.googleVision",
+      "typeVersion": 1,
+      "position": [1760, 360],
+      "credentials": {
+        "googleApi": "OBS Google Vision"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "mode": "json",
+        "jsonSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"fields\": {\n      \"type\": \"object\"\n    }\n  },\n  \"required\": [\"fields\"]\n}",
+        "instructions": "Normalize OCR text into checklist-aligned JSON output.",
+        "input": "={{$json.fullTextAnnotation.text}}"
+      },
+      "name": "Normalize OCR",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [1980, 360],
+      "credentials": {
+        "openAiApi": "OBS OpenAI"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const payload = $json.data || $json.fields || {};\nitem.json.validation_payload = payload;\nreturn item;"
+      },
+      "name": "Collect Payload",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2200, 240]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE doc_requirements SET status = $2, drive_file_id = $3, meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object('validation', $4), updated_at = NOW() WHERE client_id = $1 AND doc_type = $5 RETURNING status;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            },
+            {
+              "name": "value2",
+              "value": "={{$json.validation_status || 'RECEIVED'}}"
+            },
+            {
+              "name": "value3",
+              "value": "={{$json.googleFileId}}"
+            },
+            {
+              "name": "value4",
+              "value": "={{JSON.stringify($json.validation_payload || {})}}"
+            },
+            {
+              "name": "value5",
+              "value": "={{$json.doc_type}}"
+            }
+          ]
+        }
+      },
+      "name": "Update Requirement",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2420, 240],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "={{$env.GMAIL_ALIAS}}",
+        "toList": [
+          "={{$items('Fetch Client')[0].json.contact_email}}"
+        ],
+        "subject": "Document Requires Attention",
+        "message": "Your {{ $json.doc_type }} upload could not be validated. Please review the issues and re-upload via {{$env.APP_BASE_URL}}."
+      },
+      "name": "Send Invalid Notice",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2640, 120],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "modifyLabels",
+        "messageId": "={{$json.messageId || $json.body?.message_id}}",
+        "labelIds": [
+          "OBS/DOCS_RECEIVED"
+        ]
+      },
+      "name": "Apply Docs Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2640, 360],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH status_cte AS (\n  SELECT CASE WHEN MIN(status) FILTER (WHERE status != 'VALID') IS NULL THEN 'VALIDATED' ELSE 'DOCS_RECEIVED' END AS next_status\n  FROM doc_requirements\n  WHERE client_id = $1\n)\nUPDATE clients SET status = status_cte.next_status, updated_at = NOW() FROM status_cte WHERE id = $1 RETURNING status_cte.next_status;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Maybe Update Client Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2860, 360],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    }
+  ],
+  "connections": {
+    "Public Upload Webhook": {
+      "main": [
+        [
+          {
+            "node": "Merge Inbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Attachment Trigger": {
+      "main": [
+        [
+          {
+            "node": "Merge Inbound",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Inbound": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Fetch Client",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Requirement",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upload to Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Drive": {
+      "main": [
+        [
+          {
+            "node": "Virus Scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Virus Scan": {
+      "main": [
+        [
+          {
+            "node": "Detect Mime",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Mime": {
+      "main": [
+        [
+          {
+            "node": "Is PDF?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is PDF?": {
+      "main": [
+        [
+          {
+            "node": "PDF Extract",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vision OCR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision OCR": {
+      "main": [
+        [
+          {
+            "node": "Normalize OCR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF Extract": {
+      "main": [
+        [
+          {
+            "node": "Collect Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize OCR": {
+      "main": [
+        [
+          {
+            "node": "Collect Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Payload": {
+      "main": [
+        [
+          {
+            "node": "Update Requirement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Requirement": {
+      "main": [
+        [
+          {
+            "node": "Send Invalid Notice",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Apply Docs Label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Docs Label": {
+      "main": [
+        [
+          {
+            "node": "Maybe Update Client Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "DOM_Doc_Intake_And_Validation",
+  "versionId": "DOM_Doc_Intake_And_Validation_v1"
+}

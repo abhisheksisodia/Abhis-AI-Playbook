@@ -1,0 +1,4 @@
+segment,doc_type,rules_json
+default,business_license,"{\"mime_allowlist\":[\"application/pdf\"],\"max_size_mb\":10,\"regex\":\"LICENSE\\d{6}\"}"
+default,id_front,"{\"mime_allowlist\":[\"image/jpeg\",\"image/png\"],\"min_resolution\":{\"width\":1000,\"height\":600},\"max_size_mb\":5}"
+default,floor_plan,"{\"mime_allowlist\":[\"application/pdf\",\"image/png\"],\"max_size_mb\":20,\"requires_ocr\":true}"

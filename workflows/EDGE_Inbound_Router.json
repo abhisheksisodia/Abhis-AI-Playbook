@@ -1,0 +1,429 @@
+{
+  "name": "EDGE_Inbound_Router",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerOn": "labelAdded",
+        "resource": "message",
+        "label": "INBOX",
+        "additionalFields": {
+          "includeAttachments": true,
+          "format": "resolved"
+        }
+      },
+      "name": "Gmail Inbound",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.filter(item => {\n  const threadId = item.json.threadId || item.json.id;\n  const clientEmail = item.json.from?.value?.[0]?.address || item.json.from;\n  const hashSource = `${clientEmail}|${threadId}`;\n  const eventHash = crypto.createHash('sha256').update(hashSource).digest('hex');\n  item.json.idempotency_key = eventHash;\n  return true;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, status FROM clients WHERE lower(contact_email) = lower($1) LIMIT 1;",
+        "additionalFields": {},
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json[\"from\"]?.value?.[0]?.address || $json[\"from\"]}}"
+            }
+          ]
+        }
+      },
+      "name": "Fetch Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [460, 120],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const normalizeBody = (item) => {\n  const message = item.json;\n  const attachments = (message.attachments || []).map(att => ({\n    fileName: att.fileName,\n    mimeType: att.mimeType,\n    size: att.size,\n    attachmentId: att.attachmentId\n  }));\n  return {\n    thread_id: message.threadId || message.id,\n    message_id: message.id,\n    from: message.from?.value?.[0]?.address || message.from,\n    subject: message.subject,\n    body_html: message.body?.html || '',\n    body_text: message.body?.text || '',\n    attachments\n  };\n};\nreturn items.map(item => {\n  item.json.normalized = normalizeBody(item);\n  item.json.client = $items('Fetch Client')[0]?.json || {};\n  return item;\n});"
+      },
+      "name": "Normalize Email",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "mode": "json",
+        "jsonSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"intent\": {\n      \"type\": \"string\",\n      \"enum\": [\"SCHEDULE\", \"RESCHEDULE\", \"UPLOAD_DOC\", \"QUESTION\", \"CANCEL\", \"UNKNOWN\"]\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"minimum\": 0,\n      \"maximum\": 1\n    },\n    \"entities\": {\n      \"type\": \"object\",\n      \"additionalProperties\": true\n    }\n  },\n  \"required\": [\"intent\", \"confidence\"],\n  \"additionalProperties\": false\n}",
+        "instructions": "={{$json.normalized.subject}}\n---\n{{$json.normalized.body_text}}",
+        "input": "Classify the onboarding support request."
+      },
+      "name": "Intent Classifier",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "credentials": {
+        "openAiApi": "OBS OpenAI"
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.data.confidence}}",
+              "operation": "largerEqual",
+              "value2": 0.7
+            }
+          ]
+        }
+      },
+      "name": "Confidence OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "propertyName": "data.intent",
+        "dataType": "string",
+        "fallbackOutput": true,
+        "rules": [
+          {
+            "value": "SCHEDULE"
+          },
+          {
+            "value": "RESCHEDULE"
+          },
+          {
+            "value": "UPLOAD_DOC"
+          },
+          {
+            "value": "QUESTION"
+          }
+        ]
+      },
+      "name": "Switch Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": "DOM_Scheduling_Orchestrator",
+        "options": {
+          "waitTillCalledOnce": true
+        },
+        "additionalFields": {}
+      },
+      "name": "Call Scheduling",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1340, 140]
+    },
+    {
+      "parameters": {
+        "workflowId": "DOM_Doc_Intake_And_Validation",
+        "options": {
+          "waitTillCalledOnce": true
+        }
+      },
+      "name": "Call Doc Intake",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1340, 320]
+    },
+    {
+      "parameters": {
+        "workflowId": "DOM_QA_Auto_Reply",
+        "options": {
+          "waitTillCalledOnce": true
+        }
+      },
+      "name": "Call QA Auto Reply",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1340, 500]
+    },
+    {
+      "parameters": {
+        "workflowId": "DOM_Escalation",
+        "options": {
+          "waitTillCalledOnce": true
+        }
+      },
+      "name": "Call Escalation",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1340, 660]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "modifyLabels",
+        "messageId": "={{$json.normalized.message_id}}",
+        "labelIds": [
+          "OBS/ESCALATED"
+        ],
+        "removeLabelIds": []
+      },
+      "name": "Apply Escalated Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1600, 640],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "modifyLabels",
+        "messageId": "={{$json.normalized.message_id}}",
+        "labelIds": [
+          "={{$json.client.status ? `OBS/${$json.client.status}` : 'OBS/NEW'}}"
+        ],
+        "removeLabelIds": []
+      },
+      "name": "Apply Status Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1600, 300],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "events_audit",
+        "columns": [
+          "client_id",
+          "actor",
+          "event_type",
+          "payload"
+        ],
+        "values": "={{JSON.stringify([$json.client?.id || null, 'EDGE_Inbound_Router', 'EMAIL_ROUTED', {\n  message_id: $json.normalized.message_id,\n  intent: $json.data?.intent || 'UNKNOWN',\n  confidence: $json.data?.confidence || 0,\n  idempotency_key: $json.idempotency_key\n}])}}"
+      },
+      "name": "Audit Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1820, 300],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "mode": "passThrough",
+        "output": "input1"
+      },
+      "name": "Merge Routed",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [1480, 320]
+    }
+  ],
+  "connections": {
+    "Gmail Inbound": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Fetch Client",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Normalize Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Client": {
+      "main": [
+        [
+          {
+            "node": "Normalize Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Email": {
+      "main": [
+        [
+          {
+            "node": "Intent Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intent Classifier": {
+      "main": [
+        [
+          {
+            "node": "Confidence OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confidence OK?": {
+      "main": [
+        [
+          {
+            "node": "Switch Intent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Intent": {
+      "main": [
+        [
+          {
+            "node": "Call Scheduling",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call Scheduling",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call Doc Intake",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call QA Auto Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Scheduling": {
+      "main": [
+        [
+          {
+            "node": "Merge Routed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Doc Intake": {
+      "main": [
+        [
+          {
+            "node": "Merge Routed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call QA Auto Reply": {
+      "main": [
+        [
+          {
+            "node": "Merge Routed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Escalation": {
+      "main": [
+        [
+          {
+            "node": "Apply Escalated Label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Routed": {
+      "main": [
+        [
+          {
+            "node": "Apply Status Label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Status Label": {
+      "main": [
+        [
+          {
+            "node": "Audit Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "EDGE_Inbound_Router",
+  "versionId": "EDGE_Inbound_Router_v1"
+}

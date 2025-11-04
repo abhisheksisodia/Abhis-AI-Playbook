@@ -1,0 +1,391 @@
+{
+  "name": "DOM_Doc_Request",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.map(item => {\n  const clientId = item.json.client_id;\n  if (!clientId) throw new Error('client_id required');\n  item.json.idempotency_key = crypto.createHash('sha256').update(`doc_request:${clientId}`).digest('hex');\n  return item;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [220, 240]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, org_name, contact_email, segment FROM clients WHERE id = $1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Load Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [440, 240],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "sheetId": "={{$env.SHEETS_PLAYBOOK_ID}}",
+        "range": "playbooks!A:G"
+      },
+      "name": "Playbook Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [660, 80],
+      "credentials": {
+        "googleSheetsOAuth2Api": "OBS Google Sheets"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const rows = $items('Playbook Sheet', 0, 0);\nconst headers = rows.shift().json;\nconst client = $items('Load Client')[0].json;\nconst match = rows.map(r => r.json).find(r => r.segment === client.segment);\nif (!match) throw new Error('Playbook not found');\nconst playbook = headers.reduce((acc, key, idx) => { acc[key] = match[key]; return acc; }, {});\nitem.json.playbook = playbook;\nreturn item;"
+      },
+      "name": "Extract Playbook",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [660, 240]
+    },
+    {
+      "parameters": {
+        "sheetId": "={{$env.SHEETS_CHECKLISTS_ID}}",
+        "range": "checklists!A:C"
+      },
+      "name": "Checklists Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [880, 240],
+      "credentials": {
+        "googleSheetsOAuth2Api": "OBS Google Sheets"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const docs = JSON.parse($json.playbook.required_docs_json || '[]');\nconst checklistRows = $items('Checklists Sheet', 0, 0);\nconst headers = checklistRows.shift().json;\nconst rules = checklistRows.map(r => r.json).filter(r => r.segment === $json.playbook.segment);\nitem.json.doc_requirements = docs.map(doc => ({\n  doc_type: doc,\n  rules: rules.find(r => r.doc_type === doc)?.rules_json || '{}'\n}));\nreturn item;"
+      },
+      "name": "Assemble Requirements",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1100, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "const driveFolder = $json.drive_folder_id || $json.client_drive_folder;\nif (!driveFolder) throw new Error('Missing drive folder id');\nreturn $json.doc_requirements.map(req => ({ json: { doc_type: req.doc_type, parentId: driveFolder } }));"
+      },
+      "name": "Subfolder Fanout",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1320, 240]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "createFolder",
+        "name": "={{$json.doc_type}}",
+        "parentId": "={{$json.parentId}}",
+        "options": {
+          "useServiceAccount": true,
+          "ignoreIfExists": true
+        }
+      },
+      "name": "Ensure Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 2,
+      "position": [1540, 240],
+      "credentials": {
+        "googleApi": "OBS Google Drive"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const base = $env.APP_BASE_URL || 'https://obs.example.com';\nitem.json.upload_links = $json.doc_requirements.map(req => ({\n  doc_type: req.doc_type,\n  upload_url: `${base}/upload/${$json.client_id}/${req.doc_type}`\n}));\nreturn item;"
+      },
+      "name": "Build Upload Links",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [880, 440]
+    },
+    {
+      "parameters": {
+        "sheetId": "={{$env.SHEETS_TEMPLATES_ID}}",
+        "range": "templates!A:D"
+      },
+      "name": "Templates Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [1100, 440],
+      "credentials": {
+        "googleSheetsOAuth2Api": "OBS Google Sheets"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const rows = $items('Templates Sheet', 0, 0);\nrows.shift();\nconst template = rows.map(r => r.json).find(r => r.key === 'doc_request');\nif (!template) throw new Error('Doc request template missing');\nitem.json.email_template = template;\nreturn item;"
+      },
+      "name": "Select Doc Template",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1320, 440]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "={{$env.GMAIL_ALIAS}}",
+        "toList": [
+          "={{$items('Load Client')[0].json.contact_email}}"
+        ],
+        "subject": "={{$json.email_template.subject}}",
+        "message": "={{$json.email_template.body_markdown}}\n\n{{$json.upload_links.map(u => `• ${u.doc_type}: ${u.upload_url}`).join('\\n')}}"
+      },
+      "name": "Send Doc Request",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1540, 440],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": "DOM_Reminder_Cadence",
+        "additionalFields": {
+          "data": "={{JSON.stringify({ client_id: $json.client_id, cadence_type: 'doc_chase' })}}"
+        },
+        "options": {
+          "waitTillCalledOnce": true
+        }
+      },
+      "name": "Start Reminder Cadence",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1760, 440]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE clients SET status = 'DOCS_REQUESTED', updated_at = NOW() WHERE id = $1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Update Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1980, 440],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "modifyLabels",
+        "messageId": "={{$json.lastMessageId || $json.emailId}}",
+        "labelIds": [
+          "OBS/DOCS_REQUESTED"
+        ]
+      },
+      "name": "Label Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2200, 440],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Load Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Client": {
+      "main": [
+        [
+          {
+            "node": "Extract Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Upload Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Playbook Sheet": {
+      "main": [
+        [
+          {
+            "node": "Extract Playbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Playbook": {
+      "main": [
+        [
+          {
+            "node": "Assemble Requirements",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Checklists Sheet": {
+      "main": [
+        [
+          {
+            "node": "Assemble Requirements",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Requirements": {
+      "main": [
+        [
+          {
+            "node": "Subfolder Fanout",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Upload Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Subfolder Fanout": {
+      "main": [
+        [
+          {
+            "node": "Ensure Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Upload Links": {
+      "main": [
+        [
+          {
+            "node": "Select Doc Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Templates Sheet": {
+      "main": [
+        [
+          {
+            "node": "Select Doc Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Doc Template": {
+      "main": [
+        [
+          {
+            "node": "Send Doc Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Doc Request": {
+      "main": [
+        [
+          {
+            "node": "Start Reminder Cadence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Reminder Cadence": {
+      "main": [
+        [
+          {
+            "node": "Update Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status": {
+      "main": [
+        [
+          {
+            "node": "Label Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "DOM_Doc_Request",
+  "versionId": "DOM_Doc_Request_v1"
+}

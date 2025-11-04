@@ -1,0 +1,170 @@
+{
+  "name": "DOM_Escalation",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.map(item => {\n  const payload = item.json.payload || item.json;\n  if (!payload.client_id) throw new Error('client_id required');\n  item.json = payload;\n  item.json.idempotency_key = crypto.createHash('sha256').update(`${payload.client_id}|escalation`).digest('hex');\n  return item;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.CHAT_SPACE_WEBHOOK_URL}}",
+        "sendBody": true,
+        "options": {
+          "bodyContentType": "json"
+        },
+        "bodyParametersJson": "={{JSON.stringify({ cardsV2: [{ cardId: 'escalation', card: { sections: [{ header: 'Onboarding Escalation', widgets: [{ textParagraph: { text: `Client: ${$json.client_id}<br>Summary: ${$json.summary || 'Review required'}` } }, { buttonList: { buttons: [{ text: 'Approve', onClick: { openLink: { url: `${$env.APP_BASE_URL}/escalations/${$json.client_id}?action=approve` } } }, { text: 'Call', onClick: { openLink: { url: 'tel:+1234567890' } } }, { text: 'Reject', onClick: { openLink: { url: `${$env.APP_BASE_URL}/escalations/${$json.client_id}?action=reject` } } }] } }] }] } }] })}}"
+      },
+      "name": "Post Chat Card",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [440, 180]
+    },
+    {
+      "parameters": {
+        "path": "dom/escalation-action",
+        "responseMode": "onReceived"
+      },
+      "name": "Action Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [440, 420]
+    },
+    {
+      "parameters": {
+        "waitTime": 5,
+        "unit": "minutes"
+      },
+      "name": "Wait Decision",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE clients SET status = 'ON_HOLD', updated_at = NOW() WHERE id = $1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Mark On Hold",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [880, 180],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "modifyLabels",
+        "messageId": "={{$json.messageId}}",
+        "labelIds": [
+          "OBS/ON_HOLD"
+        ]
+      },
+      "name": "Label Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1100, 180],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Post Chat Card",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Action Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Chat Card": {
+      "main": [
+        [
+          {
+            "node": "Wait Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action Webhook": {
+      "main": [
+        [
+          {
+            "node": "Wait Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Decision": {
+      "main": [
+        [
+          {
+            "node": "Mark On Hold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark On Hold": {
+      "main": [
+        [
+          {
+            "node": "Label Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "DOM_Escalation",
+  "versionId": "DOM_Escalation_v1"
+}

@@ -1,0 +1,318 @@
+{
+  "name": "DOM_Completion_And_Handoff",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 320]
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.map(item => {\n  const payload = item.json.payload || item.json;\n  if (!payload.client_id) throw new Error('client_id required');\n  item.json = payload;\n  item.json.idempotency_key = crypto.createHash('sha256').update(`${payload.client_id}|handoff`).digest('hex');\n  return item;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [220, 320]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.*, s.scheduled_at, s.status AS session_status FROM clients c LEFT JOIN sessions s ON s.client_id = c.id AND s.status = 'COMPLETED' WHERE c.id = $1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Fetch Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [440, 320],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) AS pending FROM doc_requirements WHERE client_id = $1 AND status != 'VALID';",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Check Docs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [660, 160],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const pending = parseInt($items('Check Docs')[0].json.pending || 0, 10);\nif (pending > 0) throw new Error('Docs not fully validated');\nif ($items('Fetch Client')[0].json.session_status !== 'COMPLETED') throw new Error('Session not completed');\nreturn items;"
+      },
+      "name": "Validate Preconditions",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [660, 320]
+    },
+    {
+      "parameters": {
+        "functionCode": "const client = $items('Fetch Client')[0].json;\nconst summary = `# Onboarding Summary\\n\\n- Client: ${client.org_name}\\n- Primary Contact: ${client.contact_name} (${client.contact_email})\\n- Session Date: ${client.scheduled_at}`;\nitem.json.summary_markdown = summary;\nreturn item;"
+      },
+      "name": "Build Summary",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [880, 320]
+    },
+    {
+      "parameters": {
+        "html": "=<html><body><pre>{{$json.summary_markdown}}</pre></body></html>"
+      },
+      "name": "HTML to PDF",
+      "type": "n8n-nodes-base.htmlToPdf",
+      "typeVersion": 1,
+      "position": [1100, 320]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "binaryPropertyName": "data",
+        "parents": [
+          "={{$items('Fetch Client')[0].json.drive_folder_id}}"
+        ],
+        "fileName": "handoff_summary.pdf",
+        "options": {
+          "useServiceAccount": true
+        }
+      },
+      "name": "Save PDF",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 2,
+      "position": [1320, 320],
+      "credentials": {
+        "googleApi": "OBS Google Drive"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "={{$env.GMAIL_ALIAS}}",
+        "toList": [
+          "={{$items('Fetch Client')[0].json.contact_email}}",
+          "ops@demo.local"
+        ],
+        "subject": "Onboarding complete",
+        "message": "Attached is the onboarding summary."
+      },
+      "name": "Send Handoff Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1540, 320],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://crm.example.com/update",
+        "allowUnauthorizedCerts": true,
+        "options": {
+          "bodyContentType": "json"
+        },
+        "sendBody": true,
+        "bodyParametersJson": "={{JSON.stringify({ client_id: $json.client_id, status: 'COMPLETE' })}}"
+      },
+      "name": "Update CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1760, 320]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE clients SET status = 'COMPLETE', updated_at = NOW() WHERE id = $1;",
+        "values": {
+          "string": [
+            {
+              "name": "value1",
+              "value": "={{$json.client_id}}"
+            }
+          ]
+        }
+      },
+      "name": "Finalize Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1980, 320],
+      "credentials": {
+        "postgres": "OBS Postgres"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "modifyLabels",
+        "messageId": "={{$json.messageId}}",
+        "labelIds": [
+          "OBS/COMPLETE"
+        ]
+      },
+      "name": "Label Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [2200, 320],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Fetch Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Client": {
+      "main": [
+        [
+          {
+            "node": "Validate Preconditions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Docs": {
+      "main": [
+        [
+          {
+            "node": "Validate Preconditions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Preconditions": {
+      "main": [
+        [
+          {
+            "node": "Build Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Summary": {
+      "main": [
+        [
+          {
+            "node": "HTML to PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML to PDF": {
+      "main": [
+        [
+          {
+            "node": "Save PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save PDF": {
+      "main": [
+        [
+          {
+            "node": "Send Handoff Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Handoff Email": {
+      "main": [
+        [
+          {
+            "node": "Update CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update CRM": {
+      "main": [
+        [
+          {
+            "node": "Finalize Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Status": {
+      "main": [
+        [
+          {
+            "node": "Label Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "DOM_Completion_And_Handoff",
+  "versionId": "DOM_Completion_And_Handoff_v1"
+}

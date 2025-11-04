@@ -1,0 +1,5 @@
+key,channel,subject,body_markdown
+intro_email,gmail,"Welcome to OBS Onboarding","Hi {{contact_name}},\n\nWe're excited to partner with {{org_name}}. Please use the secure links below to upload documents.\n\nBest,\nOBS Team"
+doc_request,gmail,"Document request for onboarding","Hi {{contact_name}},\n\nWe still need the following items to move forward. Please upload using the secure links above.\n\nThanks!"
+doc_reminder,gmail,"Reminder: documents outstanding","Hi {{contact_name}},\n\nFriendly reminder that we are waiting on your outstanding onboarding documents. Let us know if you need help.\n\n- OBS"
+training_reminder,gmail,"Upcoming onboarding session","Hi {{contact_name}},\n\nYour onboarding session is coming up soon. Reply if you need to adjust anything.\n\nThanks,\nOBS"

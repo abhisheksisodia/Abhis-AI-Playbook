@@ -1,0 +1,87 @@
+{
+  "name": "OPS_Error_Inbox",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "const crypto = require('crypto');\nreturn items.map(item => {\n  const executionId = item.json.execution?.id || Date.now();\n  item.json.idempotency_key = crypto.createHash('sha256').update(`error:${executionId}`).digest('hex');\n  return item;\n});"
+      },
+      "name": "Idempotency Guard",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [220, 240]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "from": "={{$env.GMAIL_ALIAS}}",
+        "toList": [
+          "ops@demo.local"
+        ],
+        "subject": "n8n workflow failure",
+        "message": "Workflow {{$json.workflow.name}} failed. Execution ID {{$json.execution.id}}. Error: {{$json.error.message}}"
+      },
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [440, 120],
+      "credentials": {
+        "gmailOAuth2": "OBS Gmail Service"
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{$env.CHAT_SPACE_WEBHOOK_URL}}",
+        "sendBody": true,
+        "options": {
+          "bodyContentType": "json"
+        },
+        "bodyParametersJson": "={{JSON.stringify({ text: `n8n failure in ${$json.workflow.name} (execution ${$json.execution.id}). Replay: ${$json.execution.url}` })}}"
+      },
+      "name": "Notify Chat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [440, 360]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Guard": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "id": "OPS_Error_Inbox",
+  "versionId": "OPS_Error_Inbox_v1"
+}
