@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -17,9 +16,9 @@ from .notifiers import email as email_notifier
 from .notifiers import slack as slack_notifier
 from .pipeline import assembly, normalize, quality, scoring, summaries
 from .schemas import ItemPayload, SummaryPayload
-from .storage.datastore import LocalJSONStore
+from .storage import BaseDatastore, GoogleDriveStore, LocalJSONStore, StorageArtifact
 from .utils.logger import get_logger, setup_logger
-from .utils.text import truncate_words
+from .utils.text import slugify, truncate_words
 
 app = typer.Typer(help="Abhi's AI Playbook Newsletter Agent")
 
@@ -45,13 +44,23 @@ def _build_quick_hits(items: list[ItemPayload], limit: int = 6) -> list[dict]:
     return quick_hits
 
 
-def _save_flagged(items: list[ItemPayload], store: LocalJSONStore) -> None:
-    if not items:
-        return
-    path = store.base_path / "flagged_items.json"
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump([item.to_dict() for item in items], handle, indent=2)
-    get_logger("cli").info("Flagged items saved to %s", path)
+def _init_datastore(settings: Settings, run_slug: str) -> BaseDatastore:
+    backend = (settings.storage.backend or "local").lower()
+    if backend == "local":
+        return LocalJSONStore(settings.storage.path, run_slug=run_slug)
+    if backend in {"gdrive", "google_drive"}:
+        return GoogleDriveStore(settings.storage, run_slug=run_slug)
+    raise typer.BadParameter(f"Unsupported storage backend: {backend}")
+
+
+def _load_reference_text(store: BaseDatastore, path: Optional[Path], key: str) -> str:
+    if path:
+        return _read_optional_file(path)
+    return store.load_reference_text(key)
+
+
+def _format_artifact_display(artifact: StorageArtifact) -> str:
+    return artifact.label or artifact.uri
 
 
 @app.command()
@@ -78,7 +87,8 @@ def run(
     logger = get_logger("cli")
 
     settings: Settings = load_config(config_path)
-    store = LocalJSONStore(settings.storage.path)
+    issue_slug = f"issue-{issue_number}-{slugify(issue_date.strftime('%Y-%m-%d'))}"
+    store = _init_datastore(settings, run_slug=issue_slug)
 
     # Stage 1 & 2: Discovery
     youtube_items = youtube_discovery.discover(settings)
@@ -89,7 +99,7 @@ def run(
 
     # Stage 3: Scoring
     passed_items, flagged_items = scoring.score_items(normalized_items, settings)
-    _save_flagged(flagged_items, store)
+    store.save_flagged_items(flagged_items)
 
     if not passed_items:
         logger.warning("No items passed scoring thresholds. Exiting.")
@@ -106,9 +116,9 @@ def run(
     quick_hits_source = passed_items[3:] if len(passed_items) > 3 else []
     quick_hits = _build_quick_hits(quick_hits_source)
 
-    strategy_report = _read_optional_file(strategy_path)
-    tone_report = _read_optional_file(tone_path)
-    personality_notes = _read_optional_file(personality_path)
+    strategy_report = _load_reference_text(store, strategy_path, "strategy")
+    tone_report = _load_reference_text(store, tone_path, "tone")
+    personality_notes = _load_reference_text(store, personality_path, "personality")
 
     draft, markdown, beehiiv_html = assembly.assemble_newsletter(
         summary_payloads,
@@ -121,15 +131,15 @@ def run(
         issue_date=issue_date,
     )
 
-    draft_dir = store.save_newsletter(draft, markdown, beehiiv_html)
+    draft_artifact = store.save_newsletter(draft, markdown, beehiiv_html)
 
     # Stage 6: Quality Gates
     quality_report = quality.run_quality_gates(draft, summary_payloads, quick_hits)
-    quality_path = store.save_quality_report(quality_report)
+    quality_artifact = store.save_quality_report(quality_report)
 
     # Stage 7: Notifications
-    draft_url = f"file://{draft_dir / 'newsletter.md'}"
-    quality_url = f"file://{quality_path}"
+    draft_url = draft_artifact.extra.get("markdown_uri", draft_artifact.uri)
+    quality_url = quality_artifact.uri
 
     slack_notifier.send_digest(
         settings.notifications.slack_webhook_env,
@@ -144,8 +154,8 @@ def run(
     )
 
     rprint("[green]Newsletter pipeline complete.[/green]")
-    rprint(f"Draft saved to: {draft_dir}")
-    rprint(f"Quality report: {quality_path}")
+    rprint(f"Draft saved to: {_format_artifact_display(draft_artifact)}")
+    rprint(f"Quality report: {_format_artifact_display(quality_artifact)}")
 
 
 def main() -> None:

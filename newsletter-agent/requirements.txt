@@ -12,3 +12,6 @@ openai>=1.35.9 ; python_version >= "3.8"
 python-slugify>=8.0.4
 rapidfuzz>=3.6.2
 youtube-transcript-api>=0.6.2
+google-api-python-client>=2.131.0
+google-auth>=2.29.0
+google-auth-httplib2>=0.2.0

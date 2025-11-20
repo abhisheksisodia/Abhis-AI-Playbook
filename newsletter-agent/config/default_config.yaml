@@ -41,6 +41,14 @@ storage:
   path: "data"
   airtable_base_id: null
   airtable_api_key_env: "AIRTABLE_API_KEY"
+  google_drive:
+    credentials_path: null
+    credentials_env: "GOOGLE_SERVICE_ACCOUNT_JSON"
+    base_folder_id: null
+    inputs:
+      strategy_file_id: null
+      tone_file_id: null
+      personality_file_id: null
 
 notifications:
   slack_webhook_env: "NEWSLETTER_SLACK_WEBHOOK"

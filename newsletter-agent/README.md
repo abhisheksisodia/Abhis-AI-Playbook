@@ -68,6 +68,13 @@ python -m newsletter_agent.cli run --issue-number 42 --issue-date 2024-07-07
 
 Outputs are written to `data/` (items, summaries, draft markdown/HTML, quality report, flagged items).
 
+### Google Drive Storage (optional)
+- Set `storage.backend: gdrive` in `config/default_config.yaml` (or your custom config) and provide:
+  - `storage.google_drive.base_folder_id` — parent folder for run artifacts.
+  - Service-account credentials via `storage.google_drive.credentials_path` or the env var referenced by `credentials_env` (defaults to `GOOGLE_SERVICE_ACCOUNT_JSON`).
+  - Optional `storage.google_drive.inputs` file IDs for Strategy, Tone, and Personality docs; the CLI auto-downloads them when local paths aren’t provided.
+- When enabled, the CLI uploads items, summaries, flagged items, assembled drafts (JSON/Markdown/HTML), and the quality report directly to Google Drive and shares folder/file links in Slack/email digests.
+
 ## Extensibility
 - **Sources** — Update `Run Metadata` or pass new JSON payloads to add/remove YouTube channels and blog feeds (tags are preserved for analytics).
 - **Notifications** — Attach additional nodes (Teams, Email, Telegram) after `Quality & Outputs` using the provided Slack payload as a template.

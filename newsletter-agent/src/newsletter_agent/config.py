@@ -49,11 +49,27 @@ class ScheduleConfig:
 
 
 @dataclass
+class GoogleDriveInputConfig:
+    strategy_file_id: Optional[str] = None
+    tone_file_id: Optional[str] = None
+    personality_file_id: Optional[str] = None
+
+
+@dataclass
+class GoogleDriveConfig:
+    credentials_path: Optional[str] = None
+    credentials_env: str = "GOOGLE_SERVICE_ACCOUNT_JSON"
+    base_folder_id: Optional[str] = None
+    inputs: GoogleDriveInputConfig = field(default_factory=GoogleDriveInputConfig)
+
+
+@dataclass
 class StorageConfig:
     backend: str = "local"
     path: str = "data"
     airtable_base_id: Optional[str] = None
     airtable_api_key_env: str = "AIRTABLE_API_KEY"
+    google_drive: Optional[GoogleDriveConfig] = None
 
 
 @dataclass
@@ -99,7 +115,25 @@ def load_config(path: Optional[Path] = None) -> Settings:
     scoring = ScoringConfig(**raw.get("scoring", {}))
     llm = LLMConfig(**raw.get("llm", {}))
     schedule = ScheduleConfig(**raw.get("schedule", {}))
-    storage = StorageConfig(**raw.get("storage", {}))
+    storage_raw = raw.get("storage", {})
+    google_drive_cfg = storage_raw.get("google_drive")
+    google_drive = None
+    if google_drive_cfg:
+        inputs_cfg = google_drive_cfg.get("inputs", {}) or {}
+        google_drive = GoogleDriveConfig(
+            credentials_path=google_drive_cfg.get("credentials_path"),
+            credentials_env=google_drive_cfg.get("credentials_env", "GOOGLE_SERVICE_ACCOUNT_JSON"),
+            base_folder_id=google_drive_cfg.get("base_folder_id"),
+            inputs=GoogleDriveInputConfig(**inputs_cfg),
+        )
+
+    storage = StorageConfig(
+        backend=storage_raw.get("backend", "local"),
+        path=storage_raw.get("path", "data"),
+        airtable_base_id=storage_raw.get("airtable_base_id"),
+        airtable_api_key_env=storage_raw.get("airtable_api_key_env", "AIRTABLE_API_KEY"),
+        google_drive=google_drive,
+    )
     notifications = NotificationConfig(**raw.get("notifications", {}))
 
     return Settings(

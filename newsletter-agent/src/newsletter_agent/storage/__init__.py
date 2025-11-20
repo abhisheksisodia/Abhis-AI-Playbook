@@ -1,5 +1,5 @@
 """Storage backends."""
 
-from .datastore import BaseDatastore, LocalJSONStore
+from .datastore import BaseDatastore, GoogleDriveStore, LocalJSONStore, StorageArtifact
 
-__all__ = ["BaseDatastore", "LocalJSONStore"]
+__all__ = ["BaseDatastore", "LocalJSONStore", "GoogleDriveStore", "StorageArtifact"]

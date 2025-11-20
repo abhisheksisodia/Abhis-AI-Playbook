@@ -63,6 +63,7 @@ The Python package under `src/newsletter_agent/` mirrors the same data contracts
 ## Data Persistence & Configuration
 
 - **n8n storage** – the workflow emits archive-ready JSON (`$json.archive`) containing items, summaries, quick hits, flagged content, quality report, markdown, and Beehiiv payloads.
+- **CLI storage** – choose between local JSON dumps or the Google Drive backend (`storage.backend: gdrive`) to persist items/summaries/drafts and to fetch strategy/tone/personality docs from shared folders.
 - **Secrets** – provide API keys (YouTube, Anthropic/OpenAI, Beehiiv, Slack) via n8n credentials or environment variables referenced in the Function nodes.
 - **Source management** – update the default channel/feed lists inside `Run Metadata` or supply overrides via webhook payload/Google Sheet before the run.
 

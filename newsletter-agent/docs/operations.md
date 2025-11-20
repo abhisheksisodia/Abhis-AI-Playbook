@@ -10,6 +10,7 @@ This guide covers setup, day-to-day operations, source management, and troublesh
    - Beehiiv API key (`BEEHIIV_API_KEY`) & publication ID
    - Slack OAuth/Webhook credentials for notifications
    - Optional: Airtable/Notion/Postgres credentials if you plan to archive structured data
+   - Optional: Google Drive service-account JSON (if you want the CLI to read/write via Drive)
 
 2. **Import the workflow**
    - Upload `workflows/n8n-newsletter-workflow.json` to n8n.
@@ -42,6 +43,12 @@ This guide covers setup, day-to-day operations, source management, and troublesh
 4. **Archive**
    - Enable the placeholder node `Archive to DB (configure)` and connect Airtable/Notion/Postgres (use `{{$json.archive}}`).
    - Store the full archive payload per run to keep sources, summaries, drafts, and quality checks queryable.
+
+5. **Google Drive storage (CLI)**
+   - Switch `storage.backend` to `gdrive` and set `storage.google_drive.base_folder_id` to the parent folder for issue folders.
+   - Provide credentials via `storage.google_drive.credentials_path` or set the JSON in the env var referenced by `credentials_env` (defaults to `GOOGLE_SERVICE_ACCOUNT_JSON`).
+   - If you store Strategy/Tone/Personality docs in Drive, drop their file IDs under `storage.google_drive.inputs.*`; the CLI fetches the latest content automatically when local files aren’t passed.
+   - All CLI outputs (items, summaries, flagged list, newsletter JSON/Markdown/HTML, quality report) are uploaded to the run’s Drive folder, and Slack/email digests link to those artifacts.
 
 ## 3. Source Management
 
