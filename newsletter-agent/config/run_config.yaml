@@ -1,0 +1,58 @@
+schedule:
+  cron: "0 6 * * 0"
+  lookback_days: 14
+
+sources:
+  youtube_channels: {}
+  blog_feeds:
+    hugging_face:
+      url: "https://huggingface.co/blog/feed.xml"
+      tags: ["engineering", "ai", "agents"]
+  manual_sources_sheet: null
+
+scoring:
+  min_auto_publish_score: 60
+  manual_review_floor: 45
+  weights:
+    audience_fit: 0.3
+    practicality: 0.25
+    originality: 0.2
+    freshness: 0.15
+    brand_safety: 0.1
+
+llm:
+  provider: "anthropic"
+  model: "claude-3-5-sonnet-20240620"
+  max_retries: 3
+  temperature: 0.2
+  api_key_env: "ANTHROPIC_API_KEY"
+
+storage:
+  backend: "local"
+  path: "data"
+  airtable_base_id: null
+  airtable_api_key_env: "AIRTABLE_API_KEY"
+  google_drive:
+    credentials_path: null
+    credentials_env: "GOOGLE_SERVICE_ACCOUNT_JSON"
+    base_folder_id: null
+    inputs:
+      strategy_file_id: null
+      tone_file_id: null
+      personality_file_id: null
+
+notifications:
+  slack_webhook_env: null
+  email_service: null
+  recipients: []
+
+summarizer:
+  top_k: 10
+  enrich_social_copy: true
+  include_seo: true
+
+assembly:
+  reference_style_path: "reference_newsletters/"
+  beehiiv:
+    api_key_env: "BEEHIIV_API_KEY"
+    publication_id: "your-publication-id"

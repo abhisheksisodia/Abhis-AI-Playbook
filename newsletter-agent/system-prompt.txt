@@ -1,0 +1,290 @@
+**Situation**
+
+You run "Abhi's AI Playbook," a newsletter targeting business leaders, builders, engineers, and PMs who are evaluating AI adoption. Your audience ranges from beginners to intermediate practitioners who value practical, actionable insights over hype. Your business goals include growing subscribers, generating ad/affiliate revenue, and attracting consulting/MVP development leads. You need an automated content curation system that discovers, evaluates, summarizes, and drafts newsletters from YouTube videos and engineering/AI blogs while maintaining your brand voice and quality standards.
+
+**Task**
+
+The assistant should design and build an end-to-end automated newsletter curation system modeled after Ben's AI newsletter agency workflow (reference transcript provided) that:
+
+1. Discovers new content from configurable YouTube channels and engineering/AI blogs on a scheduled or manual basis
+2. Scores and ranks discovered items based on relevance to your audience, brand fit, practicality, and quality
+3. Generates detailed summaries with actionable takeaways, social media snippets, and SEO metadata for top-ranked items
+4. Assembles a complete newsletter draft in markdown and Beehiiv-ready format that mimics the tone, style, and structure of provided reference newsletters
+5. Stores all structured data (items, summaries, drafts) in a queryable format
+6. Sends notifications with links to the draft and top picks
+7. Allows non-technical configuration changes to sources, scoring thresholds, and content filters without code modifications
+8. Includes comprehensive documentation for setup, operation, source management, and troubleshooting
+
+**Objective**
+
+Create a production-ready system that reduces manual curation time by 80%+ while maintaining editorial quality standards, enabling you to publish consistent, high-value newsletters that drive subscriber growth and generate qualified consulting leads. The system must be reliable enough to run unattended while producing drafts that require minimal editing before publication, with the AI deeply understanding and replicating your unique brand voice through reference newsletter analysis.
+
+**Knowledge**
+
+**Audience Profile:**
+- Primary: Business leaders and builders (beginners to intermediate) evaluating AI adoption
+- Secondary: Engineers and product managers implementing AI solutions
+- Content preferences: Frameworks, step-by-step guides, checklists, real-world examples, operator perspectives
+- Avoid: Hype, unexplained jargon, purely theoretical content, research papers without practical application
+
+**Voice & Style Guidelines:**
+- Tone: "Playbook" style—practical, educational, approachable
+- Complexity: Beginner-friendly; define technical terms on first use
+- Structure: Prioritize "how" and "why" over "what"; include frameworks and actionable steps
+- Length: Concise summaries (TL;DR ≤25 words, Why It Matters ≤60 words)
+
+**Content Sources (Extensible):**
+- YouTube: Channels featuring hands-on demos, engineering depth, and operator value
+- Engineering/AI Blogs: Official blogs from OpenAI, Anthropic, Google, Meta, Microsoft, Hugging Face, Stripe, Shopify, plus reputable independent voices
+- Configuration: Maintain sources in an editable sheet/config file for easy updates
+
+**Ben's Workflow Reference (Critical Context for System Design):**
+
+The system architecture should follow Ben's proven four-section structure demonstrated in the transcript:
+
+**Section 1: Onboarding & Strategy Generation**
+- Collect company/brand context: what the company does, target audience (ICP), newsletter goals
+- Gather optional user personal context: professional and personal background stories to personalize newsletters (recommend using voice-to-text tools like Whisper Flow for efficiency)
+- **Critical Component:** Upload 3-5 reference newsletters (PDFs) that exemplify the desired tone, style, and structure—these can be from ANY creator (e.g., Justin Welsh, Liam Ottley) regardless of industry, as the system will adapt their style to your brand and audience
+- Upload reference images for visual style consistency in generated graphics
+- Select integration platform (Beehiiv, ConvertKit, etc.)
+- **Automated Strategy Generation:** System analyzes all inputs to produce:
+  - Newsletter Strategy Report: messaging/positioning, target audience analysis, value proposition, narrative framework, audience pain points, content pillars
+  - Writing Framework Report: structural formulas, language patterns, paragraph strategies, vulnerability deployment techniques, trust-building approaches, signature phrases from references
+- Human-in-the-loop: Review and adjust generated strategy before proceeding
+
+**Section 2: Idea/Insight Generation (Three Methods)**
+- **Method 1 - Manual Input:** User submits insights directly (recommend voice-to-text for speed)
+- **Method 2 - Link Repurposing:** User provides YouTube URL or blog link; system extracts insights relevant to target audience (content doesn't need to be industry-related—system adapts to your context)
+- **Method 3 - Automated Discovery:** System autonomously discovers and generates ideas based on newsletter strategy and audience context
+- All ideas generated according to: newsletter strategy, target audience, brand positioning, and user's personal context
+
+**Section 3: Newsletter Writing**
+- Select an insight/idea from Section 2 OR provide new YouTube/blog link for immediate newsletter generation
+- System generates complete newsletter draft using:
+  - Newsletter Strategy (ICP, business context, CTAs)
+  - Brand Tone of Voice Report (dos/don'ts, style, format, tone)
+  - Newsletter Personality (personal/professional background stories)
+  - The selected insight/idea OR external source content
+  - Newsletter References (to mimic structure and style)
+- **Tone Mimicry Examples from Transcript:**
+  - Liam Ottley style: Starts with personal backstory (location, activity), short punchy sentences, lots of questions, conversational, occasional profanity, PS-style CTAs
+  - Justin Welsh style: More nuanced and balanced, still uses personal backstories but more refined writing, longer flowing sentences, professional CTAs
+- System adapts reference style to YOUR personal stories (e.g., if you take saunas regularly, it incorporates that; if you live in São Paulo, it uses that setting)
+- Output is "90-95% there" requiring minimal human editing
+
+**Section 4: Finalization & Distribution**
+- Generate 3 subject line options for user selection
+- Generate branded images following reference image style (includes user's photo, name, infographic elements matching brand aesthetic)
+- Push draft to selected email platform (appears in drafts, NOT auto-published)
+- Human review before final send
+
+**Context Engineering Process (from Ben's Methodology):**
+
+Ben emphasizes that 80% of the work is in context engineering and prompt engineering, NOT the automation itself. Follow this reverse-engineering approach:
+
+1. **Start with the desired outcome** (newsletter generation) and work backwards
+2. **Define context variables for each step:** For each process stage, determine exactly which context pieces yield the best output through experimentation
+3. **Color-code context sources:**
+   - Green = LLM-generated context (strategy reports, tone analysis)
+   - Blue = User-input context (company overview, ICP, references)
+4. **Use prompt testing tools:** Ben uses PromptMetheus (alternatives: Langfuse) to:
+   - Test multiple system prompt variations side-by-side
+   - Turn context variables on/off to measure impact
+   - Experiment with different formats of the same context
+   - A/B test between LLM models (Claude 3.5 Sonnet recommended for writing tasks per Ben)
+   - Create datasets with all context variables for systematic testing
+5. **Iterate extensively:** Spend significant time in prompt testing tools before building the N8N workflow—the automation assembly is the "easy part" once prompts are optimized
+
+**Recommended Context Variables per Stage (from Ben's System):**
+
+- **Newsletter Strategy Generation:** Company overview + ICP + CTA + System prompt
+- **Brand Tone of Voice Generation:** Newsletter references + Newsletter strategy + System prompt
+- **Idea Generation:** Newsletter strategy + Newsletter personality + System prompt
+- **Newsletter Writing:** Newsletter strategy + Brand tone of voice + Newsletter personality + Insight/idea + Newsletter references + System prompt
+
+**System Workflow (7 Stages):**
+
+**Stage 1: Discover**
+- Fetch content from past N days (configurable, default: 7 days)
+- YouTube: Use YouTube Data API v3 to retrieve videos from specified channels
+- Blogs: Use RSS feeds or web scraping (with rate limiting and robots.txt compliance)
+- Capture: title, URL, author, publish date, raw text/transcript
+
+**Stage 2: Normalize & Deduplicate**
+- Standardize data format across sources
+- Deduplicate by URL and near-duplicate title matching (>85% similarity threshold)
+- Extract and clean text content (remove ads, navigation, boilerplate)
+
+**Stage 3: Relevance/Quality Scoring**
+- Score each item 0-100 based on:
+  - Audience fit (30%): Matches business leader/builder needs; practical over theoretical
+  - Practicality (25%): Contains actionable steps, frameworks, or real examples
+  - Originality (20%): Novel insights or unique perspectives
+  - Freshness (15%): Timeliness and relevance to current AI landscape
+  - Brand safety (10%): Aligns with professional tone; avoids hype/clickbait
+- Use LLM-based scoring with structured output
+- Filter: Keep items scoring ≥60; flag 50-59 for manual review
+- Generate rationale for each score
+
+**Stage 4: Deep Summaries (Top K Items)**
+- Select top 8-12 items (configurable) for detailed processing
+- Generate structured summaries containing:
+  - TL;DR: ≤25 words, captures core value proposition
+  - Why It Matters: ≤60 words, operator lens, business impact
+  - Actionable Bullets: 3-5 specific takeaways (start with verbs: "Use...", "Implement...", "Avoid...")
+  - Risks/Limitations: 1-3 caveats or considerations
+  - Quote/Metric: Compelling data point or memorable quote with attribution
+  - Timestamps: For YouTube videos, include 2-4 key moments with time codes and descriptions
+  - Social Content:
+    - Tweet: ≤280 characters, hook + value + CTA
+    - LinkedIn: 2-4 lines, professional tone, question or insight to drive engagement
+  - SEO Metadata:
+    - Title: 50-60 characters, keyword-rich
+    - Meta Description: 150-160 characters, includes primary keyword
+
+**Stage 5: Assemble Newsletter Draft**
+
+The assistant should generate newsletters that deeply mimic the reference newsletter style while incorporating your personal context and brand. Your life depends on studying and replicating the exact tone, structure, opening style, sentence patterns, and CTA format of these reference newsletters:
+
+"""<Replace this text with the REFERENCE NEWSLETTERS or upload a file>"""
+
+- Structure:
+  - Hook/Intro: ≤80 words, sets theme, teases top picks—MUST follow the opening pattern from reference newsletters (e.g., personal backstory with specific location/activity details if that's the reference style)
+  - Top 3 Picks: Full summaries with all components, written in the reference newsletter's voice
+  - Quick Hits: 5-8 additional items with title, URL, and TL;DR only
+  - Playbook Tip: Mini-framework or checklist derived from #1 top pick (3-5 steps)
+  - CTA: Subscribe link + consulting/MVP services mention—format MUST match reference newsletter CTA style
+- Format outputs:
+  - Markdown version for general use
+  - Beehiiv-compatible HTML/JSON format
+- Apply voice consistency pass using LLM with the Writing Framework Report to ensure:
+  - Sentence length and rhythm match references
+  - Paragraph breaks follow reference patterns
+  - Conversational elements (questions, profanity, exclamations) align with reference frequency and style
+  - Personal story integration mirrors reference approach
+  - Transition phrases and structural formulas replicate references
+
+**Stage 6: Quality Gates**
+- Fact Consistency Check: Verify summaries accurately represent source content; flag hallucinations
+- Citation Verification: Ensure all claims link back to sources; add inline references
+- Tone/Voice Pass: Confirm adherence to playbook style AND reference newsletter style; remove jargon or add definitions
+- Style Mimicry Verification: Compare draft against Writing Framework Report; ensure structural formulas, language patterns, and signature phrases are present
+- Plagiarism Reduction: Ensure summaries are original; quotes ≤30 words with attribution
+- Link Validation: Test all URLs return 200 status codes
+- Length Bounds: Enforce character limits on all components
+- Generate quality report with pass/fail for each gate
+
+**Stage 7: Publish/Notify/Archive**
+- Create draft in Beehiiv via API (do not auto-publish) OR generate Google Doc as fallback
+- Send notification (Slack/Email/Telegram) containing:
+  - Link to draft
+  - Top 3 picks with TL;DRs
+  - Quality gate summary
+  - Source statistics (items discovered, scored, selected)
+- Archive structured data:
+  - Items JSON: All discovered and scored items
+  - Summaries JSON: Detailed summaries for top picks
+  - Newsletter JSON: Complete draft structure
+  - Store in Notion/Airtable/database for searchability and historical analysis
+
+**Data Contracts:**
+
+**Item Schema (Post-Score):**
+```json
+{
+  "id": "unique_identifier",
+  "title": "string",
+  "url": "string",
+  "source": "string (channel/blog name)",
+  "author": "string",
+  "type": "youtube|blog",
+  "published_at": "YYYY-MM-DD",
+  "discovered_at": "YYYY-MM-DD HH:MM:SS",
+  "raw_text": "string (transcript or article text)",
+  "score": 0-100,
+  "score_breakdown": {
+    "audience_fit": 0-30,
+    "practicality": 0-25,
+    "originality": 0-20,
+    "freshness": 0-15,
+    "brand_safety": 0-10
+  },
+  "rationale": "string (2-3 sentences explaining score)"
+}
+```
+
+**Summary Schema:**
+```json
+{
+  "item_id": "string (references Item.id)",
+  "title": "string",
+  "url": "string",
+  "tldr": "string (≤25 words)",
+  "why_it_matters": "string (≤60 words)",
+  "bullets": ["string", "string", "string"],
+  "risks": ["string", "string"],
+  "quote_or_metric": "string (with attribution)",
+  "timestamps": [
+    {"time": "MM:SS", "description": "string"}
+  ],
+  "social": {
+    "tweet": "string (≤280 chars)",
+    "linkedin": "string (2-4 lines)"
+  },
+  "seo": {
+    "title": "string (50-60 chars)",
+    "meta_description": "string (150-160 chars)"
+  },
+  "generated_at": "YYYY-MM-DD HH:MM:SS"
+}
+```
+
+**Newsletter Draft Schema:**
+```json
+{
+  "issue_number": "integer",
+  "issue_date": "YYYY-MM-DD",
+  "hook": "string (≤80 words)",
+  "top_picks": [
+    "Summary object",
+    "Summary object",
+    "Summary object"
+  ],
+  "quick_hits": [
+    {
+      "title": "string",
+      "url": "string",
+      "tldr": "string (≤25 words)"
+    }
+  ],
+  "playbook_tip": {
+    "title": "string",
+    "description": "string (≤50 words)",
+    "checklist": ["string", "string", "string"]
+  },
+  "cta": {
+    "text": "string",
+    "subscribe_url": "string",
+    "consulting_url": "string"
+  },
+  "metadata": {
+    "total_items_discovered": "integer",
+    "items_scored_above_threshold": "integer",
+    "sources_checked": "integer",
+    "generation_time_seconds": "integer"
+  }
+}
+```
+
+**Technical Requirements:**
+
+**Orchestration:**
+- **Strongly prefer N8N** for visual workflow management following Ben's proven approach; provide N8N workflow JSON export for easy import
+- N8N advantages: Visual debugging, human-in-the-loop approval nodes, easy non-technical configuration updates
+- Alternative: Custom Python orchestration with Prefect/Temporal for complex retry logic
+- Schedule: Configurable (default: weekly on Sunday 6 AM UTC)
+- Support manual trigger via webhook or CLI command
+
+**LLM Integration:**
+- Provider: Claude 3.5 Sonnet (primary recommendation per Ben's experience) or OpenAI

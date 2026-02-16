@@ -1,0 +1,449 @@
+{
+  "name": "Abhi's AI Playbook \u2013 Pure n8n Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": [
+          {
+            "mode": "everyWeek",
+            "hour": 6,
+            "minute": 0,
+            "weekday": 0
+          }
+        ]
+      },
+      "id": "1",
+      "name": "Weekly Schedule",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        -1740,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "path": "newsletter-agent/manual-trigger",
+        "responseMode": "onReceived",
+        "options": {
+          "responseContentType": "application/json",
+          "responseBody": "{\"status\":\"accepted\"}"
+        }
+      },
+      "id": "2",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -1740,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const input = items[0]?.json ?? {};\nconst payload = input.body ?? input.payload ?? input;\nconst defaults = {\n  youtubeChannels: [\n    { name: 'practical_ai', channelId: 'UC7kDSkjwJPrxY9YdS-Wb5jg', tags: ['frameworks', 'operators'] },\n    { name: 'openai', channelId: 'UCXZCJLdBC09xxGZ6gcdrc6A', tags: ['research', 'launch'] }\n  ],\n  blogFeeds: [\n    { name: 'openai_blog', url: 'https://openai.com/blog/rss', tags: ['official'] },\n    { name: 'hugging_face', url: 'https://huggingface.co/blog/feed.xml', tags: ['engineering'] }\n  ],\n};\nconst now = new Date();\nconst issueDate = payload.issue_date ?? now.toISOString().slice(0, 10);\nconst issueNumber = Number(payload.issue_number ?? `${issueDate.replace(/-/g, '')}`);\nconst lookbackDays = Number(payload.lookback_days ?? $env.DEFAULT_LOOKBACK_DAYS ?? 7);\nconst minScore = Number(payload.min_score ?? 65);\nconst manualFloor = Number(payload.manual_review_floor ?? 50);\nconst topK = Number(payload.top_k ?? 10);\nconst config = {\n  issueNumber,\n  issueDate,\n  lookbackDays,\n  youtubeChannels: payload.youtube_channels ?? defaults.youtubeChannels,\n  blogFeeds: payload.blog_feeds ?? defaults.blogFeeds,\n  scoring: { min: minScore, review: manualFloor },\n  summarizer: { topK },\n  llm: {\n    provider: (payload.llm_provider ?? $env.LLM_PROVIDER ?? 'anthropic').toLowerCase(),\n    model: payload.llm_model ?? $env.LLM_MODEL ?? 'claude-3-5-sonnet-20240620',\n    temperature: Number(payload.llm_temperature ?? 0.2),\n  },\n  notifications: {\n    slackChannel: payload.slack_channel ?? $env.SLACK_NEWSLETTER_CHANNEL ?? '#newsletter-alerts',\n    flaggedChannel: payload.flagged_channel ?? $env.SLACK_REVIEW_CHANNEL ?? '#newsletter-reviews',\n  },\n  strategyText: payload.strategy_text ?? '',\n  toneText: payload.tone_text ?? '',\n  personalityText: payload.personality_text ?? '',\n  beehiivPublicationId: payload.beehiiv_publication_id ?? $env.BEEHIIV_PUBLICATION_ID ?? '',\n  rawPayload: payload,\n};\nreturn [{ json: config }];"
+      },
+      "id": "3",
+      "name": "Run Metadata",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -1440,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const config = items[0].json;\n            const results = [];\n            const lookbackMs = (config.lookbackDays || 7) * 86400000;\n            const cutoff = Date.now() - lookbackMs;\n            const publishedAfter = new Date(cutoff).toISOString();\n            const nowIso = new Date().toISOString();\n\n            function cleanText(text) {\n              if (!text || typeof text !== 'string') return '';\n              return text.replace(/[\r\n]+/g, ' ').replace(/\\s+/g, ' ').trim();\n            }\n\n            async function fetchTranscript(videoId) {\n              try {\n                const transcript = await $httpRequest({\n                  method: 'GET',\n                  url: `https://youtubetranscript.com/?server_vid2=${videoId}`,\n                  json: true,\n                  timeout: 10000,\n                });\n                if (Array.isArray(transcript)) {\n                  return transcript.map(block => block.text).join(' ');\n                }\n              } catch (error) {\n                // ignore missing transcripts\n              }\n              return '';\n            }\n\n            function stripHtml(html) {\n              if (!html) return '';\n              return html\n                .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n                .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n                .replace(/<[^>]+>/g, ' ')\n                .replace(/\\s+/g, ' ')\n                .trim();\n            }\n\n            if ($env.YOUTUBE_API_KEY && Array.isArray(config.youtubeChannels) && config.youtubeChannels.length) {\n              for (const channel of config.youtubeChannels) {\n                try {\n                  const search = await $httpRequest({\n                    method: 'GET',\n                    url: 'https://www.googleapis.com/youtube/v3/search',\n                    qs: {\n                      key: $env.YOUTUBE_API_KEY,\n                      channelId: channel.channelId,\n                      part: 'id,snippet',\n                      order: 'date',\n                      type: 'video',\n                      maxResults: 20,\n                      publishedAfter,\n                    },\n                    json: true,\n                    timeout: 15000,\n                  });\n                  for (const item of (search.items ?? [])) {\n                    const videoId = item.id?.videoId;\n                    if (!videoId) continue;\n                    const snippet = item.snippet ?? {};\n                    const published = snippet.publishedAt ? new Date(snippet.publishedAt).getTime() : Date.now();\n                    if (published < cutoff) continue;\n                    const transcript = await fetchTranscript(videoId);\n                    const description = cleanText(snippet.description ?? '');\n                    const rawText = transcript || description;\n                    results.push({\n                      json: {\n                        __config: config,\n                        id: `youtube:${videoId}`,\n                        title: cleanText(snippet.title ?? ''),\n                        url: `https://www.youtube.com/watch?v=${videoId}`,\n                        source: channel.name,\n                        author: snippet.channelTitle ?? '',\n                        type: 'youtube',\n                        published_at: snippet.publishedAt ?? null,\n                        discovered_at: nowIso,\n                        raw_text: rawText,\n                        description,\n                        tags: channel.tags ?? [],\n                      },\n                    });\n                  }\n                } catch (error) {\n                  results.push({\n                    json: {\n                      __config: config,\n                      type: 'log',\n                      level: 'warn',\n                      message: `YouTube fetch failed for ${channel.name}: ${error.message}`,\n                    },\n                  });\n                }\n              }\n            }\n\n            if (Array.isArray(config.blogFeeds) && config.blogFeeds.length) {\n              for (const feed of config.blogFeeds) {\n                try {\n                  const feedResponse = await $httpRequest({\n                    method: 'GET',\n                    url: 'https://api.rss2json.com/v1/api.json',\n                    qs: { rss_url: feed.url },\n                    json: true,\n                    timeout: 15000,\n                  });\n                  for (const entry of (feedResponse.items ?? [])) {\n                    const published = entry.pubDate ? new Date(entry.pubDate).getTime() : Date.now();\n                    if (published < cutoff) continue;\n                    const articleUrl = entry.link;\n                    let articleText = '';\n                    try {\n                      const articleHtml = await $httpRequest({\n                        method: 'GET',\n                        url: articleUrl,\n                        responseFormat: 'string',\n                        timeout: 15000,\n                      });\n                      articleText = stripHtml(articleHtml);\n                    } catch (error) {\n                      articleText = stripHtml(entry.description ?? '');\n                    }\n                    results.push({\n                      json: {\n                        __config: config,\n                        id: `blog:${articleUrl}`,\n                        title: cleanText(entry.title ?? ''),\n                        url: articleUrl,\n                        source: feed.name,\n                        author: entry.author ?? '',\n                        type: 'blog',\n                        published_at: entry.pubDate ?? null,\n                        discovered_at: nowIso,\n                        raw_text: articleText,\n                        description: stripHtml(entry.description ?? ''),\n                        tags: feed.tags ?? [],\n                      },\n                    });\n                  }\n                } catch (error) {\n                  results.push({\n                    json: {\n                      __config: config,\n                      type: 'log',\n                      level: 'warn',\n                      message: `Feed fetch failed for ${feed.name}: ${error.message}`,\n                    },\n                  });\n                }\n              }\n            }\n\n            const meaningful = results.filter(item => item.json.type !== 'log');\n            if (!meaningful.length) {\n              return [{ json: { __config: config, status: 'no_content', logs: results.filter(item => item.json.type === 'log').map(item => item.json) } }];\n            }\n            if (results.some(item => item.json.type === 'log')) {\n              meaningful[0].json.__logs = results.filter(item => item.json.type === 'log').map(item => item.json);\n            }\n            return meaningful;"
+      },
+      "id": "4",
+      "name": "Discover Content",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -1200,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const seenUrls = new Set();\nconst seenTitles = [];\nconst output = [];\nlet configRef = null;\nconst logs = [];\n\nfunction similarity(a, b) {\n  const setA = new Set(a.split(' '));\n  const setB = new Set(b.split(' '));\n  const intersection = [...setA].filter(token => setB.has(token));\n  const union = new Set([...setA, ...setB]);\n  return union.size ? intersection.length / union.size : 0;\n}\n\nfor (const item of items) {\n  const data = item.json;\n  if (data.logs) {\n    logs.push(...data.logs);\n    continue;\n  }\n  if (data.type === 'log') {\n    logs.push(data);\n    continue;\n  }\n  if (data.status === 'no_content') {\n    configRef = data.__config || configRef;\n    continue;\n  }\n  if (!configRef) {\n    configRef = data.__config || {};\n  }\n  const url = data.url;\n  const title = (data.title || '').toLowerCase();\n  if (!url || !title) continue;\n  if (seenUrls.has(url)) continue;\n  let duplicate = false;\n  for (const entry of seenTitles) {\n    if (similarity(title, entry) >= 0.85) {\n      duplicate = true;\n      break;\n    }\n  }\n  if (duplicate) continue;\n  seenUrls.add(url);\n  seenTitles.push(title);\n  data.__config = configRef;\n  output.push({ json: data });\n}\n\nif (!output.length) {\n  return [{ json: { __config: configRef ?? {}, status: 'no_content', logs } }];\n}\nif (logs.length) {\n  output[0].json.__logs = logs;\n}\nreturn output;"
+      },
+      "id": "5",
+      "name": "Normalize & Deduplicate",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -960,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "if (items[0]?.json?.status === 'no_content') {\n              return items;\n            }\n            const config = items[0]?.json?.__config ?? {};\n            const logs = items[0]?.json?.__logs ?? [];\n\n            async function callLLM(cfg, systemPrompt, userPrompt, maxTokens = 700) {\n              const provider = cfg.llm?.provider ?? 'anthropic';\n              const model = cfg.llm?.model ?? 'claude-3-5-sonnet-20240620';\n              const temperature = cfg.llm?.temperature ?? 0.2;\n              if (provider === 'anthropic') {\n                const apiKey = $env.ANTHROPIC_API_KEY;\n                if (!apiKey) {\n                  throw new Error('ANTHROPIC_API_KEY not set');\n                }\n                const response = await $httpRequest({\n                  method: 'POST',\n                  url: 'https://api.anthropic.com/v1/messages',\n                  headers: {\n                    'x-api-key': apiKey,\n                    'anthropic-version': '2023-06-01',\n                    'content-type': 'application/json',\n                  },\n                  body: {\n                    model,\n                    max_tokens: maxTokens,\n                    temperature,\n                    system: systemPrompt,\n                    messages: [\n                      { role: 'user', content: userPrompt }\n                    ],\n                  },\n                  json: true,\n                  timeout: 20000,\n                });\n                return (response.content ?? []).map(block => block.text ?? '').join('').trim();\n              }\n              if (provider === 'openai') {\n                const apiKey = $env.OPENAI_API_KEY;\n                if (!apiKey) {\n                  throw new Error('OPENAI_API_KEY not set');\n                }\n                const response = await $httpRequest({\n                  method: 'POST',\n                  url: 'https://api.openai.com/v1/chat/completions',\n                  headers: {\n                    Authorization: `Bearer ${apiKey}`,\n                  },\n                  body: {\n                    model,\n                    temperature,\n                    max_tokens: maxTokens,\n                    messages: [\n                      { role: 'system', content: systemPrompt },\n                      { role: 'user', content: userPrompt }\n                    ],\n                  },\n                  json: true,\n                  timeout: 20000,\n                });\n                return response.choices?.[0]?.message?.content?.trim() ?? '';\n              }\n              throw new Error(`Unsupported LLM provider: ${provider}`);\n            }\n\n            function truncateWords(text, limit) {\n              if (!text) return '';\n              const words = text.split(/\\s+/).filter(Boolean);\n              if (words.length <= limit) return words.join(' ');\n              return `${words.slice(0, limit).join(' ')}...`;\n            }\n\n            const systemPrompt = 'You are an editorial quality evaluator for Abhi's AI Playbook. Score the content JSON strictly.';\n            const results = [];\n\n            for (const item of items) {\n              const data = { ...item.json };\n              if (data.status === 'no_content') {\n                continue;\n              }\n              const excerpt = truncateWords(data.raw_text ?? '', 500);\n              const userPrompt = `Content Title: ${data.title}\nSource Type: ${data.type}\nSource Name: ${data.source}\nPublish Date: ${data.published_at ?? 'Unknown'}\n\nContent Excerpt:\n\"\"\"\n${excerpt}\n\"\"\"\n\nRespond with JSON containing score, rationale, and score_breakdown fields.`;\n              try {\n                const completion = await callLLM(config, systemPrompt, userPrompt);\n                let parsed = {};\n                try {\n                  parsed = JSON.parse(completion);\n                } catch (error) {\n                  parsed = {};\n                }\n                data.score = Number(parsed.score ?? 0);\n                data.rationale = parsed.rationale ?? '';\n                data.score_breakdown = parsed.score_breakdown ?? {};\n              } catch (error) {\n                data.score = 0;\n                data.rationale = `Scoring failed: ${error.message}`;\n                data.score_breakdown = {};\n              }\n              data.__config = config;\n              results.push({ json: data });\n            }\n\n            if (!results.length) {\n              return [{ json: { __config: config, status: 'no_content', logs } }];\n            }\n            if (logs.length) {\n              results[0].json.__logs = logs;\n            }\n            return results;"
+      },
+      "id": "6",
+      "name": "Score & Rank",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -720,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "if (items[0]?.json?.status === 'no_content') {\n  return items;\n}\nconst config = items[0]?.json?.__config ?? {};\nconst logs = items[0]?.json?.__logs ?? [];\nconst passed = [];\nconst flagged = [];\nconst dropped = [];\n\nfor (const item of items) {\n  const data = item.json;\n  if (data.status === 'no_content') continue;\n  if (data.score >= (config.scoring?.min ?? 65)) {\n    passed.push(data);\n  } else if (data.score >= (config.scoring?.review ?? 50)) {\n    flagged.push(data);\n  } else {\n    dropped.push(data);\n  }\n}\n\nreturn [{\n  json: {\n    __config: config,\n    passed,\n    flagged,\n    dropped,\n    logs,\n  },\n}];"
+      },
+      "id": "7",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -480,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json['passed'].length}}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "8",
+      "name": "Any Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = items[0].json;\n            const config = data.__config;\n            const logs = data.logs ?? [];\n            if (!Array.isArray(data.passed) || !data.passed.length) {\n              return [{ json: { ...data, summaries: [], quickHits: [], logs } }];\n            }\n\n            async function callLLM(cfg, systemPrompt, userPrompt, maxTokens = 1500) {\n              const provider = cfg.llm?.provider ?? 'anthropic';\n              const model = cfg.llm?.model ?? 'claude-3-5-sonnet-20240620';\n              const temperature = cfg.llm?.temperature ?? 0.2;\n              if (provider === 'anthropic') {\n                const apiKey = $env.ANTHROPIC_API_KEY;\n                if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');\n                const response = await $httpRequest({\n                  method: 'POST',\n                  url: 'https://api.anthropic.com/v1/messages',\n                  headers: {\n                    'x-api-key': apiKey,\n                    'anthropic-version': '2023-06-01',\n                    'content-type': 'application/json',\n                  },\n                  body: {\n                    model,\n                    max_tokens: maxTokens,\n                    temperature,\n                    system: systemPrompt,\n                    messages: [\n                      { role: 'user', content: userPrompt }\n                    ],\n                  },\n                  json: true,\n                  timeout: 24000,\n                });\n                return (response.content ?? []).map(block => block.text ?? '').join('').trim();\n              }\n              if (provider === 'openai') {\n                const apiKey = $env.OPENAI_API_KEY;\n                if (!apiKey) throw new Error('OPENAI_API_KEY not set');\n                const response = await $httpRequest({\n                  method: 'POST',\n                  url: 'https://api.openai.com/v1/chat/completions',\n                  headers: {\n                    Authorization: `Bearer ${apiKey}`,\n                  },\n                  body: {\n                    model,\n                    temperature,\n                    max_tokens: maxTokens,\n                    messages: [\n                      { role: 'system', content: systemPrompt },\n                      { role: 'user', content: userPrompt }\n                    ],\n                  },\n                  json: true,\n                  timeout: 24000,\n                });\n                return response.choices?.[0]?.message?.content?.trim() ?? '';\n              }\n              throw new Error(`Unsupported LLM provider: ${provider}`);\n            }\n\n            function truncateWords(text, limit) {\n              if (!text) return '';\n              const words = text.split(/\\s+/).filter(Boolean);\n              if (words.length <= limit) return words.join(' ');\n              return `${words.slice(0, limit).join(' ')}...`;\n            }\n\n            const sorted = [...data.passed].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));\n            const topK = config.summarizer?.topK ?? 10;\n            const selected = sorted.slice(0, topK);\n            const summaries = [];\n            const systemPrompt = 'You write structured operator-focused summaries for Abhi's AI Playbook. Respond with strict JSON.';\n\n            for (const item of selected) {\n              const excerpt = truncateWords(item.raw_text ?? '', 1200);\n              const userPrompt = `Content Title: ${item.title}\nSource Type: ${item.type}\nSource URL: ${item.url}\nScore: ${(item.score ?? 0).toFixed(1)}\n\nContent Body:\n\"\"\"\n${excerpt}\n\"\"\"\n\nReturn JSON with keys tldr, why_it_matters, actionable_bullets, risks, quote_or_metric, timestamps, social, seo.`;\n              try {\n                const completion = await callLLM(config, systemPrompt, userPrompt, 1800);\n                const parsed = JSON.parse(completion);\n                summaries.push({\n                  item_id: item.id,\n                  title: item.title,\n                  url: item.url,\n                  tldr: parsed.tldr ?? '',\n                  why_it_matters: parsed.why_it_matters ?? '',\n                  bullets: parsed.actionable_bullets ?? [],\n                  risks: parsed.risks ?? [],\n                  quote_or_metric: parsed.quote_or_metric ?? '',\n                  timestamps: parsed.timestamps ?? [],\n                  social: parsed.social ?? {},\n                  seo: parsed.seo ?? {},\n                  score: item.score ?? 0,\n                  rationale: item.rationale ?? '',\n                });\n              } catch (error) {\n                summaries.push({\n                  item_id: item.id,\n                  title: item.title,\n                  url: item.url,\n                  tldr: truncateWords(item.raw_text ?? '', 25),\n                  why_it_matters: `Summary failed: ${error.message}`,\n                  bullets: [],\n                  risks: [],\n                  quote_or_metric: '',\n                  timestamps: [],\n                  social: {},\n                  seo: {},\n                  score: item.score ?? 0,\n                  rationale: item.rationale ?? '',\n                });\n              }\n            }\n\n            const quickHits = sorted.slice(3).map(item => ({\n              title: item.title,\n              url: item.url,\n              tldr: truncateWords(item.raw_text ?? '', 25),\n            }));\n\n            return [{\n              json: {\n                __config: config,\n                passed: sorted,\n                flagged: data.flagged,\n                dropped: data.dropped,\n                summaries,\n                quickHits,\n                logs,\n              },\n            }];"
+      },
+      "id": "9",
+      "name": "Generate Summaries",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = items[0].json;\n            const config = data.__config;\n            const summaries = data.summaries ?? [];\n            const quickHits = data.quickHits ?? [];\n            const logs = data.logs ?? [];\n\n            if (!summaries.length) {\n              return [{ json: { ...data, assembly: {}, markdown: '', logs } }];\n            }\n\n            async function callLLM(cfg, systemPrompt, userPrompt, maxTokens = 2000) {\n              const provider = cfg.llm?.provider ?? 'anthropic';\n              const model = cfg.llm?.model ?? 'claude-3-5-sonnet-20240620';\n              const temperature = cfg.llm?.temperature ?? 0.2;\n              if (provider === 'anthropic') {\n                const apiKey = $env.ANTHROPIC_API_KEY;\n                if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');\n                const response = await $httpRequest({\n                  method: 'POST',\n                  url: 'https://api.anthropic.com/v1/messages',\n                  headers: {\n                    'x-api-key': apiKey,\n                    'anthropic-version': '2023-06-01',\n                    'content-type': 'application/json',\n                  },\n                  body: {\n                    model,\n                    max_tokens: maxTokens,\n                    temperature,\n                    system: systemPrompt,\n                    messages: [\n                      { role: 'user', content: userPrompt }\n                    ],\n                  },\n                  json: true,\n                  timeout: 24000,\n                });\n                return (response.content ?? []).map(block => block.text ?? '').join('').trim();\n              }\n              if (provider === 'openai') {\n                const apiKey = $env.OPENAI_API_KEY;\n                if (!apiKey) throw new Error('OPENAI_API_KEY not set');\n                const response = await $httpRequest({\n                  method: 'POST',\n                  url: 'https://api.openai.com/v1/chat/completions',\n                  headers: {\n                    Authorization: `Bearer ${apiKey}`,\n                  },\n                  body: {\n                    model,\n                    temperature,\n                    max_tokens: maxTokens,\n                    messages: [\n                      { role: 'system', content: systemPrompt },\n                      { role: 'user', content: userPrompt }\n                    ],\n                  },\n                  json: true,\n                  timeout: 24000,\n                });\n                return response.choices?.[0]?.message?.content?.trim() ?? '';\n              }\n              throw new Error(`Unsupported LLM provider: ${provider}`);\n            }\n\n            function formatSummary(summary, index) {\n              const bullets = (summary.bullets ?? []).map(bullet => `- ${bullet}`).join('\n');\n              const risks = (summary.risks ?? []).map(risk => `- ${risk}`).join('\n');\n              const timestamps = (summary.timestamps ?? []).map(ts => `- ${ts.time}: ${ts.description}`).join('\n');\n              return `Pick ${index + 1}: ${summary.title}\nURL: ${summary.url}\nTL;DR: ${summary.tldr}\nWhy It Matters: ${summary.why_it_matters}\nActionable Takeaways:\n${bullets}\nRisks:\n${risks || '- None noted'}\nQuote/Metric: ${summary.quote_or_metric}\nTimestamps:\n${timestamps || '- n/a'}`;\n            }\n\n            const topPicks = summaries.slice(0, 3);\n            const topSection = topPicks.map(formatSummary).join('\n\n');\n            const quickHitsSection = quickHits.map(hit => `- ${hit.title} (${hit.url}): ${hit.tldr}`).join('\n');\n\n            const systemPrompt = 'You are the head writer for Abhi's AI Playbook. Produce a Markdown newsletter and Beehiiv-compatible HTML in JSON output.';\n            const userPrompt = `Strategy Context:\n${config.strategyText}\n\nTone of Voice:\n${config.toneText}\n\nPersonality Notes:\n${config.personalityText}\n\nTop Picks:\n${topSection}\n\nQuick Hits:\n${quickHitsSection}\n\nInstructions:\n- Hook <= 80 words, follow reference style.\n- Use provided summaries, do not hallucinate new facts.\n- Create Playbook Tip based on Pick 1.\n- Provide CTA with subscribe + consulting mention.\n- Return JSON with keys hook, markdown, beehiiv_html, subject_lines, preview_text, playbook_tip, cta, quality_notes.`;\n\n            let assembly = {};\n            let markdown = '';\n            try {\n              const completion = await callLLM(config, systemPrompt, userPrompt, 2500);\n              assembly = JSON.parse(completion);\n              markdown = assembly.markdown ?? '';\n            } catch (error) {\n              assembly = {\n                hook: 'Draft generation failed, manual assembly required.',\n                markdown: 'Draft generation failed. See logs.',\n                beehiiv_html: '<p>Draft generation failed.</p>',\n                subject_lines: [],\n                preview_text: '',\n                playbook_tip: {},\n                cta: {},\n                quality_notes: error.message,\n              };\n              markdown = assembly.markdown;\n            }\n\n            assembly.issue_number = config.issueNumber;\n            assembly.issue_date = config.issueDate;\n\n            return [{\n              json: {\n                __config: config,\n                summaries,\n                quickHits,\n                flagged: data.flagged,\n                dropped: data.dropped,\n                passed: data.passed,\n                assembly,\n                markdown,\n                logs,\n              },\n            }];"
+      },
+      "id": "10",
+      "name": "Assemble Draft",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = items[0].json;\n            const config = data.__config;\n            const summaries = data.summaries ?? [];\n            const quickHits = data.quickHits ?? [];\n            const flagged = data.flagged ?? [];\n            const logs = data.logs ?? [];\n            const assembly = data.assembly ?? {};\n\n            function wordCount(text) {\n              if (!text) return 0;\n              return text.trim().split(/\\s+/).filter(Boolean).length;\n            }\n\n            async function checkLink(url) {\n              if (!url) return false;\n              try {\n                await $httpRequest({ method: 'HEAD', url, timeout: 8000, rejectUnauthorized: false });\n                return true;\n              } catch (error) {\n                try {\n                  await $httpRequest({ method: 'GET', url, timeout: 8000, responseFormat: 'string', rejectUnauthorized: false });\n                  return true;\n                } catch (err) {\n                  return false;\n                }\n              }\n            }\n\n            const lengthChecks = [];\n            for (const summary of summaries) {\n              lengthChecks.push({\n                item_id: summary.item_id,\n                title: summary.title,\n                tldr_words: wordCount(summary.tldr),\n                tldr_within_limit: wordCount(summary.tldr) <= 25,\n                why_words: wordCount(summary.why_it_matters),\n                why_within_limit: wordCount(summary.why_it_matters) <= 60,\n                tweet_within_limit: summary.social?.tweet ? summary.social.tweet.length <= 280 : true,\n              });\n            }\n\n            const linkValidation = {};\n            for (const summary of summaries) {\n              linkValidation[summary.url] = await checkLink(summary.url);\n            }\n            for (const hit of quickHits) {\n              if (!(hit.url in linkValidation)) {\n                linkValidation[hit.url] = await checkLink(hit.url);\n              }\n            }\n\n            const qualityReport = {\n              generated_at: new Date().toISOString(),\n              issue_number: config.issueNumber,\n              length_checks: lengthChecks,\n              link_validation: linkValidation,\n              flagged_count: flagged.length,\n              summary_count: summaries.length,\n              quick_hits_count: quickHits.length,\n              logs,\n            };\n\n            const beehiivEnabled = Boolean((config.beehiivPublicationId || $env.BEEHIIV_PUBLICATION_ID) && $env.BEEHIIV_API_KEY && assembly.beehiiv_html);\n            const beehiivPayload = {\n              title: (assembly.subject_lines ?? [])[0] ?? `Abhi's AI Playbook #${config.issueNumber}`,\n              subject_line: (assembly.subject_lines ?? [])[0] ?? `Abhi's AI Playbook #${config.issueNumber}`,\n              preview_text: assembly.preview_text ?? '',\n              content_html: assembly.beehiiv_html ?? '<p>No content</p>',\n              send_at: null,\n            };\n\n            const topTitle = summaries[0]?.title ?? 'n/a';\n            const statusLine = beehiivEnabled ? 'Beehiiv draft will be created automatically.' : 'Beehiiv API not configured or HTML missing.';\n            const slackMessage = {\n              text: `\ud83d\udcf0 Issue ${config.issueNumber} draft ready. Top pick: ${topTitle}. ${statusLine}`,\n              attachments: summaries.slice(0, 3).map(summary => ({\n                title: summary.title,\n                title_link: summary.url,\n                text: `TL;DR: ${summary.tldr}\nWhy: ${summary.why_it_matters}`,\n              })),\n            };\n\n            const result = {\n              __config: config,\n              summaries,\n              quickHits,\n              flagged,\n              dropped: data.dropped ?? [],\n              passed: data.passed ?? [],\n              assembly,\n              markdown: data.markdown ?? '',\n              beehiivPayload,\n              beehiivEnabled,\n              qualityReport,\n              slackMessage,\n              logs,\n              archive: {\n                items_passed: data.passed ?? [],\n                summaries,\n                quick_hits: quickHits,\n                flagged,\n                logs,\n                quality_report: qualityReport,\n                markdown: data.markdown ?? '',\n                beehiiv_payload: beehiivPayload,\n              },\n            };\n\n            return [{ json: result }];"
+      },
+      "id": "11",
+      "name": "Quality & Outputs",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        440,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const payload = JSON.parse(JSON.stringify(items[0].json));\nconst config = payload.__config ?? {};\nconst publicationId = config.beehiivPublicationId || $env.BEEHIIV_PUBLICATION_ID || '';\nconst apiKey = $env.BEEHIIV_API_KEY || '';\nif (!payload.beehiivPayload) {\n  payload.beehiivPayload = {};\n}\n\nif (!payload.beehiivEnabled || !publicationId || !apiKey) {\n  payload.beehiivResponse = {\n    skipped: true,\n    reason: 'Beehiiv credentials missing or disabled.',\n  };\n  return [{ json: payload }];\n}\n\ntry {\n  const response = await $httpRequest({\n    method: 'POST',\n    url: `https://api.beehiiv.com/v2/publications/${publicationId}/drafts`,\n    headers: {\n      Authorization: `Bearer ${apiKey}`,\n      'Content-Type': 'application/json',\n    },\n    body: payload.beehiivPayload,\n    json: true,\n    timeout: 20000,\n  });\n  payload.beehiivResponse = { skipped: false, data: response };\n  payload.beehiivDraftUrl = response?.data?.web_url ?? null;\n} catch (error) {\n  payload.beehiivResponse = {\n    skipped: true,\n    reason: error.message,\n  };\n}\n\nreturn [{ json: payload }];"
+      },
+      "id": "12",
+      "name": "Beehiiv Draft",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        680,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "={{$json['__config']['notifications']['slackChannel'] || '#newsletter-alerts'}}",
+        "text": "={{$json['slackMessage'].text}}",
+        "jsonParameters": true,
+        "attachmentsJson": "={{$json['slackMessage'].attachments}}"
+      },
+      "id": "13",
+      "name": "Slack Digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        920,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json['flagged'].length}}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "14",
+      "name": "Flagged Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "={{$json['__config']['notifications']['flaggedChannel'] || '#newsletter-reviews'}}",
+        "text": "={{`\ud83d\udfe0 ${($json['flagged'] || []).length} items need review for issue ${$json['__config']['issueNumber']}.`}}",
+        "jsonParameters": true,
+        "attachmentsJson": "={{($json['flagged'] || []).slice(0, 10).map(item => ({ title: item.title, title_link: item.url, text: `Score: ${(item.score ?? 0).toFixed(1)}\\n${item.rationale ?? ''}` }))}}"
+      },
+      "id": "15",
+      "name": "Slack Flagged Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        0,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "={{$json['__config']['notifications']['slackChannel'] || '#newsletter-alerts'}}",
+        "text": "={{`\u26a0\ufe0f No newsletter draft generated for issue ${$json['__config']['issueNumber']}. Flagged items: ${($json['flagged'] || []).length}.`}}"
+      },
+      "id": "16",
+      "name": "No Draft Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "note",
+              "value": "Plug your Airtable/Notion/DB node here. Use {{$json.archive}} to store structured data."
+            }
+          ]
+        }
+      },
+      "id": "17",
+      "name": "Archive to DB (configure)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        680,
+        120
+      ],
+      "disabled": true
+    }
+  ],
+  "connections": {
+    "Weekly Schedule": {
+      "main": [
+        [
+          {
+            "node": "Run Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Metadata": {
+      "main": [
+        [
+          {
+            "node": "Discover Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover Content": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Deduplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Deduplicate": {
+      "main": [
+        [
+          {
+            "node": "Score & Rank",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score & Rank": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Any Passed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Flagged Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Passed?": {
+      "main": [
+        [
+          {
+            "node": "Generate Summaries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Draft Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Summaries": {
+      "main": [
+        [
+          {
+            "node": "Assemble Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Draft": {
+      "main": [
+        [
+          {
+            "node": "Quality & Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality & Outputs": {
+      "main": [
+        [
+          {
+            "node": "Beehiiv Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Archive to DB (configure)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Beehiiv Draft": {
+      "main": [
+        [
+          {
+            "node": "Slack Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flagged Items?": {
+      "main": [
+        [
+          {
+            "node": "Slack Flagged Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": "DEFAULT"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "newsletter"
+    },
+    {
+      "name": "pure-n8n"
+    }
+  ]
+}
