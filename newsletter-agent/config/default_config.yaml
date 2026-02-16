@@ -4,19 +4,92 @@ schedule:
 
 sources:
   youtube_channels:
-    practical_ai:
-      channel_id: "UC7kDSkjwJPrxY9YdS-Wb5jg"
-      tags: ["frameworks", "operators"]
-    openai:
-      channel_id: "UCXZCJLdBC09xxGZ6gcdrc6A"
-      tags: ["research", "launch"]
+    avtharai:
+      url: "https://www.youtube.com/@avtharai"
+      tags: ["ai", "automation", "builders"]
+    marina_wyss_ai:
+      url: "https://www.youtube.com/@MarinaWyssAI"
+      tags: ["ai", "workflows", "productivity"]
+    ai_dot_engineer:
+      url: "https://www.youtube.com/@aiDotEngineer"
+      tags: ["ai-agents", "engineering", "builders"]
+    ai_labs_393:
+      url: "https://www.youtube.com/@AILABS-393"
+      tags: ["ai", "tools", "experiments"]
+    anthropic:
+      url: "https://www.youtube.com/@anthropic-ai"
+      tags: ["research", "official", "models"]
+    ben_ai:
+      url: "https://www.youtube.com/@BenAI92"
+      tags: ["ai-agents", "automation", "operators"]
+    ai_gpt_workshop:
+      url: "https://www.youtube.com/@AI-GPTWorkshop"
+      tags: ["prompts", "automation", "tutorials"]
+    langchain:
+      url: "https://www.youtube.com/@LangChain"
+      tags: ["frameworks", "rag", "ai-agents"]
+    how_i_ai_podcast:
+      url: "https://www.youtube.com/@howiaipodcast"
+      tags: ["podcast", "founders", "ai"]
+    nate_herk:
+      url: "https://www.youtube.com/@nateherk"
+      tags: ["ai", "content", "growth"]
+    neural_maze:
+      url: "https://www.youtube.com/@TheNeuralMaze"
+      tags: ["technical-ai", "research", "agents"]
+    liam_ottley:
+      url: "https://www.youtube.com/@LiamOttley"
+      tags: ["automation", "agency", "ai"]
+    nick_saraev:
+      url: "https://www.youtube.com/@nicksaraev"
+      tags: ["ai", "creator", "tools"]
+    engineer_prompt:
+      url: "https://www.youtube.com/@engineerprompt"
+      tags: ["prompt-engineering", "ai", "dev"]
+    maryam_miradi:
+      url: "https://www.youtube.com/@maryammiradi"
+      tags: ["ai-agents", "llm", "technical-ai"]
+    ibm_technology:
+      url: "https://www.youtube.com/@IBMTechnology"
+      tags: ["enterprise", "ai", "cloud"]
+    tyler_reed_ai:
+      url: "https://www.youtube.com/@TylerReedAI"
+      tags: ["ai", "productivity", "automation"]
+    shawhin_talebi:
+      url: "https://www.youtube.com/@ShawhinTalebi"
+      tags: ["ai", "machine-learning", "tutorials"]
+    jack_itssssss:
+      url: "https://www.youtube.com/@Itssssss_Jack"
+      tags: ["ai", "automation", "creator"]
+    productive_dude:
+      url: "https://www.youtube.com/@ProductiveDude"
+      tags: ["productivity", "automation", "ai"]
+
   blog_feeds:
-    openai_blog:
-      url: "https://openai.com/blog/rss"
-      tags: ["official"]
-    hugging_face:
-      url: "https://huggingface.co/blog/feed.xml"
-      tags: ["engineering"]
+    the_rundown_ai:
+      url: "https://www.therundown.ai/feed"
+      tags: ["ai", "industry-news", "daily-briefing", "high-priority"]
+    daily_dose_of_ds:
+      url: "https://www.dailydoseofds.com/feed"
+      tags: ["data-science", "machine-learning", "tutorials", "high-priority"]
+    superhuman_zain_kahn:
+      url: "https://www.superhuman.ai/feed"
+      tags: ["ai", "productivity", "automation", "high-priority"]
+    ideabrowser:
+      url: "https://www.ideabrowser.com/feed"
+      tags: ["startup-ideas", "entrepreneurship", "medium-priority"]
+    digital_samaritan:
+      url: "https://www.digitalsamaritan.co/feed"
+      tags: ["ai-workflows", "automation", "medium-priority"]
+    god_of_prompt:
+      url: "https://godofprompt.beehiiv.com/feed"
+      tags: ["prompt-engineering", "ai-tools", "medium-priority"]
+    pragmatic_engineer:
+      url: "https://newsletter.pragmaticengineer.com/rss"
+      tags: ["software-engineering", "career", "high-priority"]
+    maryam_miradi_newsletter:
+      url: "https://www.maryammiradi.com/feed"
+      tags: ["ai-agents", "llm", "technical-ai", "high-priority"]
   manual_sources_sheet: null
 
 scoring:
