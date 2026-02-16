@@ -141,12 +141,15 @@ def run(
     draft_url = draft_artifact.extra.get("markdown_uri", draft_artifact.uri)
     quality_url = quality_artifact.uri
 
-    slack_notifier.send_digest(
-        settings.notifications.slack_webhook_env,
-        draft_url=draft_url,
-        top_picks=summary_payloads,
-        quality_report_url=quality_url,
-    )
+    if settings.notifications.slack_webhook_env:
+        slack_notifier.send_digest(
+            settings.notifications.slack_webhook_env,
+            draft_url=draft_url,
+            top_picks=summary_payloads,
+            quality_report_url=quality_url,
+        )
+    else:
+        logger.info("Skipping Slack notification; notifications.slack_webhook_env not configured.")
     email_notifier.send_email_digest(
         settings.notifications.recipients or [],
         draft_url=draft_url,

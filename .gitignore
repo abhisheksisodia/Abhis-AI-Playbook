@@ -1,1 +1,15 @@
 chargebuddy/node_modules/@next/swc-darwin-arm64/next-swc.darwin-arm64.node
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+
+# Newsletter agent output
+newsletter-agent/data/

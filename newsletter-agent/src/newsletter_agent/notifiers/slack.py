@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
 
@@ -15,12 +15,16 @@ logger = get_logger("notifiers.slack")
 
 
 def send_digest(
-    webhook_env: str,
+    webhook_env: Optional[str],
     *,
     draft_url: str,
     top_picks: List[SummaryPayload],
     quality_report_url: str | None = None,
 ) -> None:
+    if not webhook_env:
+        logger.info("Skipping Slack notification; no webhook env key configured.")
+        return
+
     webhook_url = os.getenv(webhook_env)
     if not webhook_url:
         logger.warning("Skipping Slack notification; %s not set.", webhook_env)
