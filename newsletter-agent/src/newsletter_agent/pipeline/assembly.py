@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..config import Settings
 from ..schemas import CTA, NewsletterDraft, PlaybookTip, SummaryPayload
-from ..utils.llm import LLMClient
+from ..utils.llm import LLMClient, MissingAPIKeyError
 from ..utils.logger import get_logger
 
 logger = get_logger("pipeline.assembly")
@@ -64,6 +64,49 @@ SEO Meta: {summary.seo.meta_description if summary.seo else ''}
     return "\n".join(lines)
 
 
+def _fallback_markdown(
+    summaries: List[SummaryPayload],
+    quick_hits: List[Dict[str, str]],
+    issue_number: int,
+    issue_date: datetime,
+) -> str:
+    lines = [
+        f"# Abhi's AI Playbook — Issue {issue_number}",
+        f"_Date: {issue_date.strftime('%Y-%m-%d')}_",
+        "",
+        "This week’s operator-focused AI breakdown: 3 practical signals and quick actions.",
+        "",
+        "## Top Picks",
+    ]
+    for idx, s in enumerate(summaries[:3], start=1):
+        lines.extend(
+            [
+                f"### {idx}) {s.title}",
+                f"- TL;DR: {s.tldr}",
+                f"- Why it matters: {s.why_it_matters}",
+                f"- Source: {s.url}",
+                "",
+            ]
+        )
+
+    if quick_hits:
+        lines.append("## Quick Hits")
+        for hit in quick_hits[:6]:
+            lines.append(f"- [{hit['title']}]({hit['url']}) — {hit['tldr']}")
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Playbook Tip",
+            "Pick one item, implement one takeaway in 48 hours, and define one success metric.",
+            "",
+            "## CTA",
+            "If you want this built into your team’s workflow, reply to this email.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def assemble_newsletter(
     summaries: List[SummaryPayload],
     settings: Settings,
@@ -75,11 +118,15 @@ def assemble_newsletter(
     issue_number: int,
     issue_date: datetime,
 ) -> Tuple[NewsletterDraft, str, str]:
-    client = LLMClient(
-        provider=settings.llm.provider,
-        model=settings.llm.model,
-        api_key_env=settings.llm.api_key_env,
-    )
+    client = None
+    try:
+        client = LLMClient(
+            provider=settings.llm.provider,
+            model=settings.llm.model,
+            api_key_env=settings.llm.api_key_env,
+        )
+    except MissingAPIKeyError:
+        logger.warning("LLM API key missing; using fallback newsletter assembly.")
 
     reference_style = _load_reference_style(settings.assembly.get("reference_style_path"))
     top_pick_text = _summaries_to_text(summaries[:3])
@@ -134,14 +181,36 @@ Return JSON:
 }}
 """
 
-    response = client.safe_complete(
-        ASSEMBLY_SYSTEM_PROMPT.strip(),
-        user_prompt.strip(),
-        temperature=settings.llm.temperature,
-        max_output_tokens=2000,
-    )
+    if client is not None:
+        response = client.safe_complete(
+            ASSEMBLY_SYSTEM_PROMPT.strip(),
+            user_prompt.strip(),
+            temperature=settings.llm.temperature,
+            max_output_tokens=2000,
+        )
+        data = json.loads(response.content)
+    else:
+        markdown = _fallback_markdown(summaries, quick_hits, issue_number, issue_date)
+        data = {
+            "hook": "Three high-signal AI updates you can operationalize this week.",
+            "playbook_tip": {
+                "title": "48-hour implementation sprint",
+                "description": "Turn one insight into a measurable workflow improvement this week.",
+                "checklist": [
+                    "Pick one source from Top Picks.",
+                    "Implement one concrete change in your workflow.",
+                    "Track one metric for 7 days.",
+                ],
+            },
+            "cta": {
+                "text": "Subscribe for weekly operator-grade AI playbooks.",
+                "subscribe_url": "https://abhisaiplaybook.com",
+                "consulting_url": "https://circuitstudio.ca",
+            },
+            "markdown": markdown,
+            "beehiiv_html": markdown.replace("\n", "<br/>"),
+        }
 
-    data = json.loads(response.content)
     playbook_tip_data = data.get("playbook_tip", {})
     cta_data = data.get("cta", {})
 

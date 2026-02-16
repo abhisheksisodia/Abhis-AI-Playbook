@@ -27,8 +27,10 @@ def _validate_links(summaries: List[SummaryPayload], quick_hits: List[Dict[str, 
 
     for url in urls:
         try:
-            response = httpx.head(url, timeout=10)
-            status[url] = response.status_code == 200
+            response = httpx.head(url, timeout=10, follow_redirects=True)
+            if response.status_code >= 400 or response.status_code == 405:
+                response = httpx.get(url, timeout=10, follow_redirects=True)
+            status[url] = 200 <= response.status_code < 400
         except Exception:
             status[url] = False
     return status

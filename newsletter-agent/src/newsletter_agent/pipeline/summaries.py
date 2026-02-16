@@ -14,7 +14,7 @@ from ..schemas import (
     SummaryPayload,
     TimestampHighlight,
 )
-from ..utils.llm import LLMClient
+from ..utils.llm import LLMClient, MissingAPIKeyError
 from ..utils.logger import get_logger
 from ..utils.text import truncate_words
 
@@ -122,20 +122,57 @@ def _parse_summary(item: ItemPayload, response_text: str) -> SummaryPayload:
     )
 
 
+def _fallback_summary(item: ItemPayload) -> SummaryPayload:
+    short_text = truncate_words(item.raw_text or "", 60)
+    bullets = [
+        f"Read the full source and extract 2 implementation ideas from: {item.url}",
+        "Map one idea to your existing workflow this week.",
+        "Define one measurable outcome before testing.",
+    ]
+    risks = ["Verify claims against the source before publishing."]
+    return SummaryPayload(
+        item_id=item.id,
+        title=item.title,
+        url=item.url,
+        tldr=truncate_words(short_text, 25) or "Practical AI update with execution implications.",
+        why_it_matters="Useful signal for operators building with AI this week; validate and adapt quickly.",
+        bullets=bullets,
+        risks=risks,
+        quote_or_metric="Source reviewed; include direct quote/metric after editorial verification.",
+        social=SocialCopy(
+            tweet=truncate_words(f"New signal for AI builders: {item.title} — what changes this week? {item.url}", 40),
+            linkedin=f"New AI signal worth reviewing: {item.title}\n\nKey for builders: operationalize one takeaway this week.\n{item.url}",
+        ),
+        seo=SeoMetadata(
+            title=truncate_words(item.title, 10),
+            meta_description=truncate_words(f"Practical breakdown of {item.title}", 24),
+        ),
+        generated_at=datetime.utcnow(),
+    )
+
+
 def generate_summaries(
     items: Iterable[ItemPayload], settings: Settings, *, top_k: int | None = None
 ) -> List[SummaryPayload]:
-    client = LLMClient(
-        provider=settings.llm.provider,
-        model=settings.llm.model,
-        api_key_env=settings.llm.api_key_env,
-    )
+    client = None
+    try:
+        client = LLMClient(
+            provider=settings.llm.provider,
+            model=settings.llm.model,
+            api_key_env=settings.llm.api_key_env,
+        )
+    except MissingAPIKeyError:
+        logger.warning("LLM API key missing; using fallback summary generation.")
     sorted_items = sorted(items, key=lambda item: item.score, reverse=True)
     limit = top_k or settings.summarizer.get("top_k", 10)
     selected = sorted_items[:limit]
 
     summaries: List[SummaryPayload] = []
     for item in selected:
+        if client is None:
+            summaries.append(_fallback_summary(item))
+            continue
+
         prompt = _build_prompt(item)
         response = client.safe_complete(
             SUMMARY_SYSTEM_PROMPT.strip(),

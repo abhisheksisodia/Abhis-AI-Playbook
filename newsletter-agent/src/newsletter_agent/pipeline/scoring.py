@@ -7,7 +7,7 @@ from typing import Iterable, List, Tuple
 
 from ..config import Settings
 from ..schemas import ItemPayload, ScoreBreakdown
-from ..utils.llm import LLMClient
+from ..utils.llm import LLMClient, MissingAPIKeyError
 from ..utils.logger import get_logger
 from ..utils.text import truncate_words
 
@@ -79,30 +79,75 @@ def _parse_response(item: ItemPayload, response_text: str) -> ItemPayload:
     return item
 
 
+def _heuristic_score_item(item: ItemPayload) -> ItemPayload:
+    text = (item.raw_text or "").lower()
+    title = (item.title or "").lower()
+    combined = f"{title} {text}"
+
+    practical_markers = ["how to", "workflow", "step", "playbook", "guide", "framework", "template"]
+    novelty_markers = ["new", "launch", "update", "released", "today", "2026", "2025"]
+    risk_markers = ["security", "risk", "privacy", "compliance", "safety"]
+    hype_markers = ["insane", "crazy", "secret", "guaranteed", "100x"]
+
+    practicality = min(100.0, 45.0 + 10.0 * sum(m in combined for m in practical_markers))
+    freshness = min(100.0, 55.0 + 9.0 * sum(m in combined for m in novelty_markers))
+    audience_fit = min(100.0, 50.0 + 8.0 * sum(m in combined for m in ["ai", "agent", "automation", "builder", "operator"]))
+    originality = min(100.0, 40.0 + 7.0 * sum(m in combined for m in ["case study", "example", "lessons", "breakdown", "analysis"]))
+    brand_safety = max(40.0, 90.0 - 12.0 * sum(m in combined for m in hype_markers))
+    if any(m in combined for m in risk_markers):
+        brand_safety = min(100.0, brand_safety + 5.0)
+
+    score = (
+        0.30 * audience_fit
+        + 0.25 * practicality
+        + 0.20 * originality
+        + 0.15 * freshness
+        + 0.10 * brand_safety
+    )
+
+    item.score = round(score, 2)
+    item.score_breakdown = ScoreBreakdown(
+        audience_fit=round(audience_fit, 2),
+        practicality=round(practicality, 2),
+        originality=round(originality, 2),
+        freshness=round(freshness, 2),
+        brand_safety=round(brand_safety, 2),
+    )
+    item.rationale = "Heuristic fallback scoring used because LLM key/provider was unavailable."
+    return item
+
+
 def score_items(
     items: Iterable[ItemPayload], settings: Settings
 ) -> Tuple[List[ItemPayload], List[ItemPayload]]:
-    client = LLMClient(
-        provider=settings.llm.provider,
-        model=settings.llm.model,
-        api_key_env=settings.llm.api_key_env,
-    )
+    client = None
+    try:
+        client = LLMClient(
+            provider=settings.llm.provider,
+            model=settings.llm.model,
+            api_key_env=settings.llm.api_key_env,
+        )
+    except MissingAPIKeyError:
+        logger.warning("LLM API key missing; using heuristic scoring fallback.")
 
     passed: List[ItemPayload] = []
     flagged: List[ItemPayload] = []
 
     for item in items:
-        prompt = _build_prompt(item)
-        response = client.safe_complete(
-            SCORE_SYSTEM_PROMPT.strip(),
-            prompt.strip(),
-            temperature=settings.llm.temperature,
-        )
-        try:
-            updated = _parse_response(item, response.content)
-        except ValueError as exc:
-            logger.error("Failed to parse scoring output for %s: %s", item.id, exc)
-            continue
+        if client is None:
+            updated = _heuristic_score_item(item)
+        else:
+            prompt = _build_prompt(item)
+            response = client.safe_complete(
+                SCORE_SYSTEM_PROMPT.strip(),
+                prompt.strip(),
+                temperature=settings.llm.temperature,
+            )
+            try:
+                updated = _parse_response(item, response.content)
+            except ValueError as exc:
+                logger.error("Failed to parse scoring output for %s: %s", item.id, exc)
+                continue
 
         if updated.score >= settings.scoring.min_auto_publish_score:
             passed.append(updated)

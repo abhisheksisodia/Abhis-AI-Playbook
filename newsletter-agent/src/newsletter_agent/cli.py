@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import os
+
+import feedparser
 
 import typer
 from rich import print as rprint
@@ -159,6 +162,67 @@ def run(
     rprint("[green]Newsletter pipeline complete.[/green]")
     rprint(f"Draft saved to: {_format_artifact_display(draft_artifact)}")
     rprint(f"Quality report: {_format_artifact_display(quality_artifact)}")
+
+
+@app.command("validate-sources")
+def validate_sources(
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to config YAML."),
+) -> None:
+    """Validate configured YouTube/newsletter sources and print pass/fail report."""
+    setup_logger()
+    settings: Settings = load_config(config_path)
+
+    api_key = os.getenv("YOUTUBE_API_KEY")
+    youtube_ok = 0
+    youtube_fail = 0
+
+    rprint("[bold]YouTube source validation[/bold]")
+    for name, cfg in settings.sources.youtube_channels.items():
+        channel_ref = cfg.get("channel_id") or cfg.get("channel") or cfg.get("handle") or cfg.get("url")
+        if not channel_ref:
+            youtube_fail += 1
+            rprint(f"[red]✗[/red] {name}: missing channel reference")
+            continue
+        if not api_key:
+            rprint(f"[yellow]~[/yellow] {name}: skipped (YOUTUBE_API_KEY not set)")
+            continue
+        try:
+            channel_id = youtube_discovery._resolve_channel_id(channel_ref, api_key)
+            if channel_id:
+                youtube_ok += 1
+                rprint(f"[green]✓[/green] {name}: {channel_id}")
+            else:
+                youtube_fail += 1
+                rprint(f"[red]✗[/red] {name}: could not resolve {channel_ref}")
+        except Exception as exc:
+            youtube_fail += 1
+            rprint(f"[red]✗[/red] {name}: {exc}")
+
+    blog_ok = 0
+    blog_fail = 0
+    rprint("\n[bold]Blog/newsletter feed validation[/bold]")
+    for name, cfg in settings.sources.blog_feeds.items():
+        url = cfg.get("url")
+        if not url:
+            blog_fail += 1
+            rprint(f"[red]✗[/red] {name}: missing url")
+            continue
+        parsed = feedparser.parse(url)
+        if getattr(parsed, "bozo", 0):
+            blog_fail += 1
+            rprint(f"[red]✗[/red] {name}: parse error ({getattr(parsed, 'bozo_exception', 'unknown')})")
+            continue
+        entries = len(parsed.entries or [])
+        if entries == 0:
+            blog_fail += 1
+            rprint(f"[red]✗[/red] {name}: no entries found")
+            continue
+        blog_ok += 1
+        rprint(f"[green]✓[/green] {name}: {entries} entries")
+
+    rprint("\n[bold]Summary[/bold]")
+    rprint(f"YouTube ok/fail: {youtube_ok}/{youtube_fail} (skipped if no API key)")
+    rprint(f"Feeds ok/fail: {blog_ok}/{blog_fail}")
 
 
 def main() -> None:
